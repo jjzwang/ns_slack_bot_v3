@@ -86,6 +86,20 @@ def handle_slash_command(ack, command, client, respond):
     user_id = command["user_id"]
     text = command.get("text", "").strip()
 
+    # ─── Limit to Direct Messages Only ──────────────────────────────────────────
+    # In Slack, Direct Message channel IDs always start with the letter "D"
+    if not channel_id.startswith("D"):
+        respond(
+            text=(
+                "🔒 Let's keep your request private and organized! "
+                "Please click on my name under **Apps** in your left sidebar "
+                "and run this command in a Direct Message with me."
+            ),
+            response_type="ephemeral"
+        )
+        return
+    # ────────────────────────────────────────────────────────────────────────────
+
     # Post a root message to anchor the thread
     try:
         root_msg = client.chat_postMessage(
@@ -145,16 +159,24 @@ def handle_slash_command(ack, command, client, respond):
 @app.event("message")
 def handle_message(event, client):
     """Handle replies in active interview threads."""
-    # Only process threaded replies
-    thread_ts = event.get("thread_ts")
-    if not thread_ts:
-        return
-
-    # Ignore bot messages (prevent loops)
+    
+    # Ignore bot messages (prevent loops) and system events
     if event.get("bot_id") or event.get("subtype"):
         return
 
     channel_id = event.get("channel", "")
+    thread_ts = event.get("thread_ts")
+    
+    # ─── UX Enhancement: Nudge user if they aren't using threads ────────────────
+    if not thread_ts:
+        if channel_id.startswith("D"):
+            client.chat_postMessage(
+                channel=channel_id,
+                text="💡 To start a new request, please type `/netsuite-new-change`. To continue an existing request, please reply directly in its thread!"
+            )
+        return
+    # ────────────────────────────────────────────────────────────────────────────
+
     user_id = event.get("user", "")
     user_message = event.get("text", "")
 
