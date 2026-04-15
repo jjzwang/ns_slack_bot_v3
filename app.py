@@ -18,16 +18,8 @@ import json
 import logging
 import os
 
-from dotenv import load_dotenv
-from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
-
-from claude_client import (
-    EscalateResponse,
-    MessageResponse,
-    SubmitTicketResponse,
-    call_claude,
-)
+# IMPORTANT: config.py calls load_dotenv() at its top before any os.environ.get()
+# so we import it first. Do not reorder imports without reading config.py.
 from config import (
     MAX_CONVERSATION_TURNS,
     STATUS_ESCALATED,
@@ -37,6 +29,16 @@ from config import (
     TRIAGE_CHANNEL_ID,
     validate_config,
 )
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
+
+from claude_client import (
+    EscalateResponse,
+    MessageResponse,
+    SubmitTicketResponse,
+    call_claude,
+)
+
 from database import (
     InterviewState,
     close_pool,
@@ -53,7 +55,6 @@ from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_rev
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 

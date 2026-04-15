@@ -4,6 +4,14 @@
 
 import os
 
+# Load .env BEFORE any os.environ.get() below. config.py is imported by every
+# entry point (app.py, tests, migrate scripts), and several module-level reads
+# in this file freeze their values at import time — if load_dotenv() ran later
+# (e.g. in app.py after `from config import ...`), JIRA_CONFIG / TRIAGE_CHANNEL_ID
+# would silently be empty strings even when .env had the correct values.
+from dotenv import load_dotenv
+
+load_dotenv()
 # ─── Interview Status Values ─────────────────────────────────────────────────
 
 STATUS_INTERVIEW = "INTERVIEW"
