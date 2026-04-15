@@ -8,7 +8,6 @@ import os
 
 STATUS_INTERVIEW = "INTERVIEW"
 STATUS_PROCESSING = "PROCESSING"
-STATUS_REVIEWING = "REVIEWING"
 STATUS_READY = "READY"
 STATUS_ESCALATED = "ESCALATED"
 
@@ -25,21 +24,24 @@ REVIEW_TIMEOUT_S = 30
 EXTRACTION_TIMEOUT_S = 10
 
 # ─── Channel for escalations ────────────────────────────────────────────────
+# Must be set in your .env — no hardcoded default so misconfiguration is
+# caught at startup (validate_config) rather than silently posting nowhere.
 
-TRIAGE_CHANNEL_ID = os.environ.get("TRIAGE_CHANNEL_ID", "C0AJDSR0ZSP")
+TRIAGE_CHANNEL_ID = os.environ.get("TRIAGE_CHANNEL_ID", "")
 
 # ─── Jira Configuration ─────────────────────────────────────────────────────
+# JIRA_BASE_URL and JIRA_PROJECT_KEY are required; validate_config() enforces
+# this. create_issue_url is auto-derived from base_url if not set explicitly.
+
+_jira_base_url = os.environ.get("JIRA_BASE_URL", "")
 
 JIRA_CONFIG = {
+    "base_url": _jira_base_url,
     "create_issue_url": os.environ.get(
         "JIRA_CREATE_ISSUE_URL",
-        "https://dt-planning-sandbox-237.atlassian.net/rest/api/3/issue",
+        f"{_jira_base_url}/rest/api/3/issue" if _jira_base_url else "",
     ),
-    "base_url": os.environ.get(
-        "JIRA_BASE_URL",
-        "https://dt-planning-sandbox-237.atlassian.net",
-    ),
-    "project_key": os.environ.get("JIRA_PROJECT_KEY", "FIN"),
+    "project_key": os.environ.get("JIRA_PROJECT_KEY", ""),
     "issue_type_id": os.environ.get("JIRA_ISSUE_TYPE_ID", "10001"),  # Story
     "custom_fields": {
         "value_to_the_business": os.environ.get("JIRA_CF_VALUE_TO_BUSINESS", "customfield_12975"),
@@ -66,9 +68,6 @@ EXTRACTION_MODEL = "claude-haiku-4-5-20251001"
 # =============================================================================
 # FULL PROMPT — The complete playbook, always loaded
 # =============================================================================
-# Claude gets the entire interview process every turn so it can structure
-# early questions to set up later phases. A short PHASE DIRECTIVE (prepended
-# by the prompt builder) tells Claude what to focus on THIS turn.
 
 FULL_PROMPT = """
 You are the "NetSuite Requirement Gatekeeper".
@@ -339,8 +338,6 @@ END OF PLAYBOOK
 # =============================================================================
 # PHASE DIRECTIVES — Short focus instructions prepended per turn
 # =============================================================================
-# These tell Claude what to focus on THIS turn. The full playbook above gives
-# Claude the complete process for reference; the directive anchors attention.
 
 PHASE_DIRECTIVES = {
 
@@ -476,3 +473,53 @@ CLAUDE_TOOLS = [
         },
     },
 ]
+
+
+# =============================================================================
+# Startup Validation
+# =============================================================================
+
+def validate_config() -> None:
+    """
+    Validate that all required environment variables are present.
+
+    Call this once at application startup (before App() and init_db()) so
+    that misconfiguration fails loudly with a clear message rather than
+    producing confusing errors during the first user interaction.
+
+    Raises:
+        ValueError: listing every missing variable.
+    """
+    missing: list[str] = []
+
+    # Slack
+    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
+        if not os.environ.get(var):
+            missing.append(var)
+
+    # Anthropic
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        missing.append("ANTHROPIC_API_KEY")
+
+    # Jira
+    for var in ("JIRA_USER_EMAIL", "JIRA_API_TOKEN"):
+        if not os.environ.get(var):
+            missing.append(var)
+    if not JIRA_CONFIG.get("base_url"):
+        missing.append("JIRA_BASE_URL")
+    if not JIRA_CONFIG.get("project_key"):
+        missing.append("JIRA_PROJECT_KEY")
+
+    # Slack triage channel
+    if not TRIAGE_CHANNEL_ID:
+        missing.append("TRIAGE_CHANNEL_ID")
+
+    # Database — either a full URL or a password for the individual-var path
+    if not (os.environ.get("DATABASE_URL") or os.environ.get("PGPASSWORD")):
+        missing.append("DATABASE_URL (or PGPASSWORD)")
+
+    if missing:
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(missing)}\n"
+            "Copy .env.example to .env and fill in all required values."
+        )

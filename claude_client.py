@@ -1,11 +1,6 @@
 # =============================================================================
 # Claude API Client
 # =============================================================================
-# Handles all communication with the Anthropic Claude API, including
-# retry logic with exponential backoff and structured tool_use parsing.
-#
-# Uses the prompt_builder to assemble a focused system prompt per turn
-# instead of sending the full monolithic prompt every time.
 
 import logging
 import re
@@ -15,24 +10,20 @@ from typing import Any, Optional, Union
 
 import anthropic
 
-from config import CLAUDE_MODEL, CLAUDE_TOOLS
+from config import CLAUDE_MODEL, CLAUDE_TOOLS, MAX_ATTEMPTS
 from database import InterviewState
 from prompt_builder import assemble_prompt
 
 logger = logging.getLogger(__name__)
 
-# ─── Response Types ──────────────────────────────────────────────────────────
-
 
 @dataclass
 class MessageResponse:
-    """Claude returned a text message to continue the conversation."""
     text: str
 
 
 @dataclass
 class SubmitTicketResponse:
-    """Claude called submit_ticket — all pillars are verified."""
     title: str
     description: str
     value_to_business: str
@@ -42,17 +33,11 @@ class SubmitTicketResponse:
 
 @dataclass
 class EscalateResponse:
-    """Claude called escalate — user couldn't clarify after multiple attempts."""
     reason: str
     partial_data: dict
 
 
 ClaudeResponse = Union[MessageResponse, SubmitTicketResponse, EscalateResponse]
-
-
-# ─── Internal Tag Patterns to Strip ──────────────────────────────────────────
-# Claude may output internal state tracking in XML-style tags that must never
-# be shown to the user. Add patterns here as needed.
 
 _INTERNAL_TAG_PATTERNS = [
     re.compile(r"<state>.*?</state>", re.DOTALL),
@@ -62,20 +47,15 @@ _INTERNAL_TAG_PATTERNS = [
 
 
 def _strip_internal_tags(text: str) -> str:
-    """Remove any internal state/tracking tags Claude may include in its response."""
     for pattern in _INTERNAL_TAG_PATTERNS:
         text = pattern.sub("", text)
     return text.strip()
 
 
-# ─── Tool Response Validation ────────────────────────────────────────────────
-
 _SUBMIT_TICKET_REQUIRED = ["title", "description", "value_to_business", "acceptance_criteria", "enablement_plan"]
-_ESCALATE_REQUIRED = ["reason"]
 
 
 def _validate_submit_ticket(inp: dict) -> SubmitTicketResponse:
-    """Validate and parse submit_ticket tool input."""
     missing = [f for f in _SUBMIT_TICKET_REQUIRED if f not in inp or not inp[f]]
     if missing:
         raise ValueError(f"submit_ticket tool call missing required fields: {missing}")
@@ -89,50 +69,49 @@ def _validate_submit_ticket(inp: dict) -> SubmitTicketResponse:
 
 
 def _validate_escalate(inp: dict) -> EscalateResponse:
-    """Validate and parse escalate tool input."""
     if "reason" not in inp or not inp["reason"]:
         raise ValueError("escalate tool call missing required field: reason")
-    return EscalateResponse(
-        reason=str(inp["reason"]),
-        partial_data=inp.get("partial_data", {}),
-    )
+    return EscalateResponse(reason=str(inp["reason"]), partial_data=inp.get("partial_data", {}))
 
 
 # ─── API Client ──────────────────────────────────────────────────────────────
 
-MAX_RETRIES = 3
 INITIAL_BACKOFF_S = 1.0
+
+# Module-level client cache — reusing the same Anthropic client preserves its
+# internal httpx connection pool, avoiding repeated TLS handshakes per turn.
+_clients: dict[str, anthropic.Anthropic] = {}
+
+
+def _get_client(api_key: str) -> anthropic.Anthropic:
+    if api_key not in _clients:
+        _clients[api_key] = anthropic.Anthropic(api_key=api_key)
+    return _clients[api_key]
 
 
 def call_claude(
     message_history: list[dict[str, str]],
     api_key: str,
     state: Optional[InterviewState] = None,
+    phase: Optional[str] = None,
 ) -> ClaudeResponse:
     """
     Call the Claude API with the full conversation history.
-
-    The system prompt is assembled dynamically per turn by the prompt_builder,
-    which selects the appropriate phase instructions and domain probes based
-    on the conversation state.
 
     Args:
         message_history: List of {"role": "user"|"assistant", "content": str}
         api_key: Anthropic API key
         state: InterviewState for pillar-based phase detection.
-               If None, falls back to heuristic detection.
-
-    Returns:
-        MessageResponse, SubmitTicketResponse, or EscalateResponse
+        phase: Pre-computed phase from _run_interview_turn. When provided,
+               assemble_prompt skips re-detection (avoids redundant call and
+               guarantees the prompt matches the routing decision upstream).
     """
-    client = anthropic.Anthropic(api_key=api_key)
-
-    # Assemble the system prompt for this specific turn
-    system_prompt = assemble_prompt(message_history, state=state)
+    client = _get_client(api_key)
+    system_prompt = assemble_prompt(message_history, state=state, phase=phase)
 
     last_error: Optional[Exception] = None
 
-    for attempt in range(MAX_RETRIES + 1):
+    for attempt in range(MAX_ATTEMPTS):
         try:
             response = client.messages.create(
                 model=CLAUDE_MODEL,
@@ -145,9 +124,9 @@ def call_claude(
 
         except anthropic.RateLimitError as e:
             last_error = e
-            if attempt < MAX_RETRIES:
+            if attempt < MAX_ATTEMPTS - 1:
                 wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                logger.warning(f"Rate limited. Retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
+                logger.warning(f"Rate limited. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
                 time.sleep(wait)
             else:
                 raise
@@ -155,31 +134,28 @@ def call_claude(
         except anthropic.APIStatusError as e:
             if e.status_code >= 500:
                 last_error = e
-                if attempt < MAX_RETRIES:
+                if attempt < MAX_ATTEMPTS - 1:
                     wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                    logger.warning(f"Server error {e.status_code}. Retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
+                    logger.warning(f"Server error {e.status_code}. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
                     time.sleep(wait)
                 else:
                     raise
             else:
-                # Client error (4xx except rate limit) — don't retry
                 raise
 
         except anthropic.APIConnectionError as e:
             last_error = e
-            if attempt < MAX_RETRIES:
+            if attempt < MAX_ATTEMPTS - 1:
                 wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                logger.warning(f"Connection error. Retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
+                logger.warning(f"Connection error. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
                 time.sleep(wait)
             else:
                 raise
 
-    # Should not reach here, but just in case
     raise last_error or RuntimeError("Claude API call failed after all retries")
 
 
 def _parse_response(response: Any) -> ClaudeResponse:
-    """Parse Claude's response content blocks into typed responses."""
     text_content = ""
     tool_call: Optional[dict] = None
 
@@ -189,17 +165,14 @@ def _parse_response(response: Any) -> ClaudeResponse:
         elif block.type == "tool_use":
             tool_call = {"name": block.name, "input": block.input}
 
-    # Tool calls take priority over text
     if tool_call:
         if tool_call["name"] == "submit_ticket":
             return _validate_submit_ticket(tool_call["input"])
         if tool_call["name"] == "escalate":
             return _validate_escalate(tool_call["input"])
-        # Unknown tool — log and fall through to text
         logger.warning(f"Unknown tool call: {tool_call['name']}")
 
     if text_content:
-        # Strip any internal state/tracking tags before returning to user
         clean_text = _strip_internal_tags(text_content)
         if clean_text:
             return MessageResponse(text=clean_text)

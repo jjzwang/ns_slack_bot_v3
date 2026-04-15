@@ -34,8 +34,8 @@ from config import (
     STATUS_INTERVIEW,
     STATUS_PROCESSING,
     STATUS_READY,
-    STATUS_REVIEWING,
     TRIAGE_CHANNEL_ID,
+    validate_config,
 )
 from database import (
     InterviewState,
@@ -57,7 +57,14 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+# Validate all required env vars before touching any external service.
+# Raises ValueError with a clear list of what's missing.
+validate_config()
+
+# Cache the API key once — it's validated above so this will never be empty.
+_ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
+
+app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 # Initialize database on startup
 init_db()
@@ -71,7 +78,7 @@ atexit.register(close_pool)
 # =============================================================================
 
 @app.command("/netsuite-new-change")
-def handle_slash_command(ack, command, client, say, respond):
+def handle_slash_command(ack, command, client, respond):
     """Start a new interview when a user runs /netsuite-new-change."""
     ack()
 
@@ -136,7 +143,7 @@ def handle_slash_command(ack, command, client, say, respond):
 # =============================================================================
 
 @app.event("message")
-def handle_message(event, client, say):
+def handle_message(event, client):
     """Handle replies in active interview threads."""
     # Only process threaded replies
     thread_ts = event.get("thread_ts")
@@ -283,21 +290,11 @@ def _run_interview_turn(
         return
 
     try:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            client.chat_update(
-                channel=channel_id,
-                ts=placeholder_ts,
-                text="⚠️ Configuration error: ANTHROPIC_API_KEY is not set.",
-            )
-            update_state(thread_ts, status=STATUS_INTERVIEW)
-            return
-
         # ─── Step 1: Pillar Extraction (every gathering turn) ────────
         phase = detect_phase(history, state)
 
         if phase == "gathering":
-            extraction = extract_pillars(history, api_key)
+            extraction = extract_pillars(history, _ANTHROPIC_API_KEY)
             if extraction.success:
                 existing_pillars = state.get_pillars()
                 merged = merge_pillars(existing_pillars, extraction.pillars)
@@ -321,20 +318,20 @@ def _run_interview_turn(
                 pass
 
             pillars = state.get_pillars()
-            review = run_review_gate(pillars, history, api_key)
+            review = run_review_gate(pillars, history, _ANTHROPIC_API_KEY)
 
             # Store review results
             review_turn_index = len(history)  # Index at which review happened
             update_state(
                 thread_ts,
-                review_completed=1,
+                review_completed=True,
                 review_gaps_json=json.dumps(review.gaps),
                 review_enrichments_json=json.dumps(review.enrichments),
                 review_turn_index=review_turn_index,
             )
 
             # Update local state object
-            state.review_completed = 1
+            state.review_completed = True
             state.review_gaps_json = json.dumps(review.gaps)
             state.review_enrichments_json = json.dumps(review.enrichments)
             state.review_turn_index = review_turn_index
@@ -343,7 +340,8 @@ def _run_interview_turn(
             phase = detect_phase(history, state)
 
         # ─── Step 3: BSA Response (normal Claude call) ───────────────
-        result = call_claude(history, api_key, state=state)
+        # Pass the already-computed phase so assemble_prompt doesn't re-detect.
+        result = call_claude(history, _ANTHROPIC_API_KEY, state=state, phase=phase)
 
         # ─── Route: Text Message ─────────────────────────────────────
         if isinstance(result, MessageResponse):
@@ -382,18 +380,21 @@ def _run_interview_turn(
             jira_result = create_jira_ticket(result, identity, enrichments=enrichments or None)
 
             if jira_result.success:
+                success_text = (
+                    f"🎉 Jira ticket created successfully!\n"
+                    f"*{jira_result.issue_key}*: {jira_result.issue_url}\n\n"
+                    f"The ticket has been populated with:\n"
+                    f"• Description\n• Value to the Business\n"
+                    f"• Acceptance Criteria (Given/When/Then)\n• Enablement Plan"
+                    + ("\n• Implementation Notes (from solution review)" if enrichments else "")
+                )
                 client.chat_update(
                     channel=channel_id,
                     ts=placeholder_ts,
-                    text=(
-                        f"🎉 Jira ticket created successfully!\n"
-                        f"*{jira_result.issue_key}*: {jira_result.issue_url}\n\n"
-                        f"The ticket has been populated with:\n"
-                        f"• Description\n• Value to the Business\n"
-                        f"• Acceptance Criteria (Given/When/Then)\n• Enablement Plan"
-                        + ("\n• Implementation Notes (from solution review)" if enrichments else "")
-                    ),
+                    text=success_text,
                 )
+                # Append assistant reply so history is complete before saving.
+                history.append({"role": "assistant", "content": success_text})
                 update_state(
                     thread_ts,
                     status=STATUS_READY,
@@ -407,15 +408,19 @@ def _run_interview_turn(
                     }),
                 )
             else:
+                # jira_result.error contains the sanitised message from jira_client;
+                # raw API response bodies are never surfaced here.
+                failure_text = (
+                    "⚠️ Your ticket was verified but Jira creation failed. "
+                    "Your data has been saved — please contact your admin."
+                )
                 client.chat_update(
                     channel=channel_id,
                     ts=placeholder_ts,
-                    text=(
-                        f"⚠️ Your ticket was verified but Jira creation failed: "
-                        f"{jira_result.error}\n"
-                        f"Your data has been saved. Please contact your admin."
-                    ),
+                    text=failure_text,
                 )
+                logger.error(f"Jira creation failed for thread {thread_ts}: {jira_result.error}")
+                history.append({"role": "assistant", "content": failure_text})
                 update_state(
                     thread_ts,
                     status=STATUS_INTERVIEW,
@@ -424,6 +429,11 @@ def _run_interview_turn(
 
         # ─── Route: Escalate ─────────────────────────────────────────
         elif isinstance(result, EscalateResponse):
+            escalation_text = (
+                "I've connected you with the team for additional help. "
+                "A business analyst will follow up with you shortly."
+            )
+            history.append({"role": "assistant", "content": escalation_text})
             _post_escalation(
                 client=client,
                 channel_id=channel_id,
@@ -433,6 +443,7 @@ def _run_interview_turn(
                 reason=result.reason,
                 partial_data=result.partial_data,
                 placeholder_ts=placeholder_ts,
+                message_history=history,
             )
 
     except Exception as e:
@@ -478,6 +489,7 @@ def _force_escalation(
         ),
     )
 
+    # _post_escalation owns all state writes; pass history so it's saved once.
     _post_escalation(
         client=client,
         channel_id=channel_id,
@@ -486,14 +498,7 @@ def _force_escalation(
         display_name=state.user_display_name,
         reason=reason,
         partial_data=partial_data,
-    )
-
-    # Save the full history before closing out
-    update_state(
-        thread_ts,
-        status=STATUS_ESCALATED,
-        message_history=json.dumps(history),
-        pillars_json=json.dumps(partial_data),
+        message_history=history,
     )
 
 
@@ -506,8 +511,16 @@ def _post_escalation(
     reason: str,
     partial_data: dict,
     placeholder_ts: str | None = None,
+    message_history: list[dict] | None = None,
 ) -> None:
-    """Post escalation messages to triage channel and user thread."""
+    """
+    Post escalation messages to the triage channel and user thread,
+    then write the final ESCALATED state in a single update_state call.
+
+    Args:
+        message_history: Full conversation history (including the final
+                         assistant message) to persist alongside the escalation.
+    """
     # Post to triage channel (graceful failure if bot not invited)
     try:
         client.chat_postMessage(
@@ -545,11 +558,14 @@ def _post_escalation(
             text=user_text,
         )
 
-    update_state(
-        thread_ts,
-        status=STATUS_ESCALATED,
-        pillars_json=json.dumps(partial_data or {}),
-    )
+    # Single state write — include message_history when the caller provides it.
+    state_updates: dict = {
+        "status": STATUS_ESCALATED,
+        "pillars_json": json.dumps(partial_data or {}),
+    }
+    if message_history is not None:
+        state_updates["message_history"] = json.dumps(message_history)
+    update_state(thread_ts, **state_updates)
 
 
 # =============================================================================
