@@ -58,6 +58,38 @@ from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_rev
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+def _safe_update_or_post(
+    client,
+    channel_id: str,
+    thread_ts: str,
+    placeholder_ts: str,
+    text: str,
+) -> None:
+    """
+    Update the placeholder message if possible; otherwise post a new thread
+    reply. Ensures terminal outcomes (ticket created, ticket failed) always
+    reach the user even if the placeholder message can't be edited (e.g.,
+    Slack rate limit, message too old, channel archived).
+    """
+    try:
+        client.chat_update(channel=channel_id, ts=placeholder_ts, text=text)
+        return
+    except Exception as e:
+        logger.warning(
+            f"chat_update failed for thread {thread_ts} (placeholder {placeholder_ts}): {e}. "
+            f"Falling back to chat_postMessage."
+        )
+
+    try:
+        client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=text)
+    except Exception as e:
+        # Last resort — log loudly. The user won't see the outcome, but the
+        # state is still persisted correctly and a manual follow-up is possible.
+        logger.error(
+            f"Both chat_update and chat_postMessage failed for thread {thread_ts}: {e}. "
+            f"User will not see the terminal message. Text was: {text!r}"
+        )
+
 # Validate all required env vars before touching any external service.
 # Raises ValueError with a clear list of what's missing.
 validate_config()
@@ -67,8 +99,16 @@ _ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
-# Initialize database on startup
-init_db()
+# Initialize database on startup.
+# Gated behind RUN_MIGRATIONS to prevent concurrent ALTER TABLE calls when
+# multiple instances start simultaneously. For pilot (single instance), set
+# RUN_MIGRATIONS=1 in the deploy environment. For multi-instance deploys,
+# run migrations out-of-band before rollout and leave this unset.
+if os.environ.get("RUN_MIGRATIONS", "").lower() in ("1", "true", "yes"):
+    logger.info("RUN_MIGRATIONS is set — running init_db()")
+    init_db()
+else:
+    logger.info("Skipping init_db() — set RUN_MIGRATIONS=1 to enable")
 
 # Graceful connection pool shutdown on process exit
 atexit.register(close_pool)
@@ -343,24 +383,41 @@ def _run_interview_turn(
             pillars = state.get_pillars()
             review = run_review_gate(pillars, history, _ANTHROPIC_API_KEY)
 
-            # Store review results
-            review_turn_index = len(history)  # Index at which review happened
-            update_state(
-                thread_ts,
-                review_completed=True,
-                review_gaps_json=json.dumps(review.gaps),
-                review_enrichments_json=json.dumps(review.enrichments),
-                review_turn_index=review_turn_index,
-            )
+            if review.success:
+                # Store review results and mark review as completed so it
+                # doesn't run again on subsequent turns.
+                review_turn_index = len(history)
+                update_state(
+                    thread_ts,
+                    review_completed=True,
+                    review_gaps_json=json.dumps(review.gaps),
+                    review_enrichments_json=json.dumps(review.enrichments),
+                    review_turn_index=review_turn_index,
+                )
 
-            # Update local state object
-            state.review_completed = True
-            state.review_gaps_json = json.dumps(review.gaps)
-            state.review_enrichments_json = json.dumps(review.enrichments)
-            state.review_turn_index = review_turn_index
+                # Update local state object
+                state.review_completed = True
+                state.review_gaps_json = json.dumps(review.gaps)
+                state.review_enrichments_json = json.dumps(review.enrichments)
+                state.review_turn_index = review_turn_index
 
-            # Re-check phase after review
-            phase = detect_phase(history, state)
+                # Re-check phase after review
+                phase = detect_phase(history, state)
+            else:
+                # Review failed (timeout, API error, etc.). Do NOT mark
+                # review_completed — the next turn will retry. Fall through
+                # to the drafting phase so the user experience continues,
+                # but the ticket won't have review enrichments unless a
+                # retry succeeds.
+                logger.warning(
+                    f"Review gate failed for thread {thread_ts}; will retry "
+                    f"on next turn. Error: {review.error}"
+                )
+                # Proceed to drafting so the conversation doesn't stall.
+                # detect_phase will return "review" again next turn, giving
+                # us another attempt.
+                phase = "drafting"
+
 
         # ─── Step 3: BSA Response (normal Claude call) ───────────────
         # Pass the already-computed phase so assemble_prompt doesn't re-detect.
@@ -411,10 +468,8 @@ def _run_interview_turn(
                     f"• Acceptance Criteria (Given/When/Then)\n• Enablement Plan"
                     + ("\n• Implementation Notes (from solution review)" if enrichments else "")
                 )
-                client.chat_update(
-                    channel=channel_id,
-                    ts=placeholder_ts,
-                    text=success_text,
+                _safe_update_or_post(
+                    client, channel_id, thread_ts, placeholder_ts, success_text
                 )
                 # Append assistant reply so history is complete before saving.
                 history.append({"role": "assistant", "content": success_text})
@@ -437,10 +492,8 @@ def _run_interview_turn(
                     "⚠️ Your ticket was verified but Jira creation failed. "
                     "Your data has been saved — please contact your admin."
                 )
-                client.chat_update(
-                    channel=channel_id,
-                    ts=placeholder_ts,
-                    text=failure_text,
+                _safe_update_or_post(
+                    client, channel_id, thread_ts, placeholder_ts, failure_text
                 )
                 logger.error(f"Jira creation failed for thread {thread_ts}: {jira_result.error}")
                 history.append({"role": "assistant", "content": failure_text})

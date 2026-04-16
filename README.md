@@ -99,8 +99,7 @@ chmod +x setup_postgres.sh
 sudo -u postgres ./setup_postgres.sh
 
 The script creates the role + database and prints a DATABASE_URL. Paste that
-into your .env. On first startup the app auto-creates the interview_state
-table and indexes (database.init_db()).
+into your .env. On first startup with RUN_MIGRATIONS=1 set in your .env, the app auto-creates the interview_state table and indexes (database.init_db()). For the pilot, keep this set. Before scaling past a single worker, run migrations out-of-band (e.g., via a one-off container) and unset RUN_MIGRATIONS on your running instances.
 
 Production note: init_db() runs CREATE TABLE IF NOT EXISTS +
 ALTER TABLE ADD COLUMN IF NOT EXISTS on every boot. Under a rolling
