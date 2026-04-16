@@ -1,0 +1,21 @@
+# NetSuite Requirement Gatekeeper — Python dependencies
+# Install with: pip install -r requirements.txt
+# Tested on Python 3.11+
+
+# Slack
+slack-bolt>=1.18,<2.0
+
+# Anthropic Claude SDK
+anthropic>=0.40,<1.0
+
+# Database
+psycopg2-binary>=2.9,<3.0
+
+# HTTP (used by identity.py + jira_client.py)
+requests>=2.31,<3.0
+
+# httpx is used by the Anthropic SDK and directly in reviewer.py for timeouts
+httpx>=0.27,<1.0
+
+# Environment variable loading
+python-dotenv>=1.0,<2.0
