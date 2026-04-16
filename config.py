@@ -23,6 +23,7 @@ STATUS_ESCALATED = "ESCALATED"
 
 MAX_ATTEMPTS = 3
 MAX_CONVERSATION_TURNS = 15
+MAX_REVIEW_ATTEMPTS = 2
 
 # ─── Review Gate Configuration ───────────────────────────────────────────────
 

@@ -22,6 +22,7 @@ import os
 # so we import it first. Do not reorder imports without reading config.py.
 from config import (
     MAX_CONVERSATION_TURNS,
+    MAX_REVIEW_ATTEMPTS,
     STATUS_ESCALATED,
     STATUS_INTERVIEW,
     STATUS_PROCESSING,
@@ -55,7 +56,15 @@ from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_rev
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+from log_context import ThreadContextFilter, thread_context
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s [thread=%(thread_ts)s]: %(message)s",
+)
+# Attach the filter to the root logger so EVERY module's logs get thread_ts,
+# not just app.py's. This includes claude_client, reviewer, jira_client, etc.
+logging.getLogger().addFilter(ThreadContextFilter())
 logger = logging.getLogger(__name__)
 
 def _safe_update_or_post(
@@ -160,37 +169,38 @@ def handle_slash_command(ack, command, client, respond):
 
     thread_ts = root_msg["ts"]
 
-    # Resolve user identity
-    identity = resolve_user_identity(user_id, client)
+    with thread_context(thread_ts):
+        # Resolve user identity
+        identity = resolve_user_identity(user_id, client)
 
-    # Create initial state
-    state = InterviewState(
-        thread_id=thread_ts,
-        channel_id=channel_id,
-        user_id=user_id,
-        user_email=identity.email or "",
-        user_jira_id=identity.jira_account_id or "",
-        user_display_name=identity.display_name,
-        status=STATUS_INTERVIEW,
-    )
-    create_state(state)
+        # Create initial state
+        state = InterviewState(
+            thread_id=thread_ts,
+            channel_id=channel_id,
+            user_id=user_id,
+            user_email=identity.email or "",
+            user_jira_id=identity.jira_account_id or "",
+            user_display_name=identity.display_name,
+            status=STATUS_PROCESSING,
+        )
+        create_state(state)
 
-    # Build the first user message for Claude
-    user_content = "Hi, I'd like to create a new NetSuite requirement ticket."
-    if text:
-        user_content += f" Here's what I need: {text}"
+        # Build the first user message for Claude
+        user_content = "Hi, I'd like to create a new NetSuite requirement ticket."
+        if text:
+            user_content += f" Here's what I need: {text}"
 
-    history = [{"role": "user", "content": user_content}]
+        history = [{"role": "user", "content": user_content}]
 
-    # Call Claude for the first response
-    _run_interview_turn(
-        client=client,
-        channel_id=channel_id,
-        thread_ts=thread_ts,
-        user_id=user_id,
-        state=state,
-        history=history,
-    )
+        # Call Claude for the first response
+        _run_interview_turn(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            state=state,
+            history=history,
+        )
 
 
 # =============================================================================
@@ -242,75 +252,76 @@ def handle_message(event, client):
     if state is None:
         # Not an active interview thread — ignore
         return
+    
+    with thread_context(thread_ts):
+        # Guard: already done or escalated (no lock needed)
+        if state.status == STATUS_READY:
+            client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=(
+                    "This interview has already been completed and a Jira ticket was created. "
+                    "Run `/netsuite-new-change` to start a new request."
+                ),
+            )
+            return
 
-    # Guard: already done or escalated (no lock needed)
-    if state.status == STATUS_READY:
-        client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            text=(
-                "This interview has already been completed and a Jira ticket was created. "
-                "Run `/netsuite-new-change` to start a new request."
-            ),
-        )
-        return
+        if state.status == STATUS_ESCALATED:
+            client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=(
+                    "This request has been escalated to the team. "
+                    "Run `/netsuite-new-change` to start a new request."
+                ),
+            )
+            return
 
-    if state.status == STATUS_ESCALATED:
-        client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            text=(
-                "This request has been escalated to the team. "
-                "Run `/netsuite-new-change` to start a new request."
-            ),
-        )
-        return
+        # Atomic lock: only proceed if status transitions from INTERVIEW → PROCESSING
+        # This prevents race conditions when two messages arrive close together.
+        if not try_lock_state(thread_ts, STATUS_INTERVIEW, STATUS_PROCESSING):
+            logger.info(f"Thread {thread_ts} could not acquire lock (status is not INTERVIEW). Skipping.")
+            return  
 
-    # Atomic lock: only proceed if status transitions from INTERVIEW → PROCESSING
-    # This prevents race conditions when two messages arrive close together.
-    if not try_lock_state(thread_ts, STATUS_INTERVIEW, STATUS_PROCESSING):
-        logger.info(f"Thread {thread_ts} could not acquire lock (status is not INTERVIEW). Skipping.")
-        return
+        # Re-read state after acquiring lock to get fresh data
+        state = get_state(thread_ts)
+        if state is None:
+            return
 
-    # Re-read state after acquiring lock to get fresh data
-    state = get_state(thread_ts)
-    if state is None:
-        return
+        # Build conversation history from stored state
+        history = state.get_history()
+        history.append({"role": "user", "content": user_message})
 
-    # Build conversation history from stored state
-    history = state.get_history()
-    history.append({"role": "user", "content": user_message})
+        # ─── Enforce conversation turn limit ─────────────────────────────
+        user_turn_count = sum(1 for msg in history if msg["role"] == "user")
 
-    # ─── Enforce conversation turn limit ─────────────────────────────
-    user_turn_count = sum(1 for msg in history if msg["role"] == "user")
+        if user_turn_count > MAX_CONVERSATION_TURNS:
+            logger.info(
+                f"Thread {thread_ts} exceeded {MAX_CONVERSATION_TURNS} user turns. "
+                f"Forcing escalation."
+            )
+            _force_escalation(
+                client=client,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                state=state,
+                history=history,
+                reason=(
+                    f"Conversation exceeded {MAX_CONVERSATION_TURNS} turns without "
+                    f"reaching a verified ticket. Auto-escalated."
+                ),
+            )
+            return
 
-    if user_turn_count > MAX_CONVERSATION_TURNS:
-        logger.info(
-            f"Thread {thread_ts} exceeded {MAX_CONVERSATION_TURNS} user turns. "
-            f"Forcing escalation."
-        )
-        _force_escalation(
+        _run_interview_turn(
             client=client,
             channel_id=channel_id,
             thread_ts=thread_ts,
             user_id=user_id,
             state=state,
             history=history,
-            reason=(
-                f"Conversation exceeded {MAX_CONVERSATION_TURNS} turns without "
-                f"reaching a verified ticket. Auto-escalated."
-            ),
         )
-        return
-
-    _run_interview_turn(
-        client=client,
-        channel_id=channel_id,
-        thread_ts=thread_ts,
-        user_id=user_id,
-        state=state,
-        history=history,
-    )
 
 
 # =============================================================================
@@ -326,18 +337,20 @@ def _run_interview_turn(
     history: list[dict],
 ) -> None:
     """
-    Execute one turn of the interview loop:
-      1. Set PROCESSING lock (already done by caller for message events)
-      2. Post "Thinking..." placeholder
-      3. Run pillar extraction (if in gathering phase)
-      4. Run review gate (if pillars are ready and review hasn't run)
-      5. Call Claude BSA with full history + phase context
-      6. Overwrite placeholder with response (message / submit / escalate)
-      7. Update state
+    Execute one turn of the interview loop. The caller is responsible for
+    transitioning state to PROCESSING before invoking this function.
+
+    1. Post "Thinking..." placeholder
+    2. Run pillar extraction (if in gathering phase)
+    3. Run review gate (if pillars are ready and review hasn't run)
+    4. Call Claude BSA with full history + phase context
+    5. Overwrite placeholder with response (message / submit / escalate)
+    6. Update state
     """
-    # Ensure we're in PROCESSING status (slash command path may not have locked)
-    if state.status != STATUS_PROCESSING:
-        update_state(thread_ts, status=STATUS_PROCESSING)
+    assert state.status == STATUS_PROCESSING, (
+        f"_run_interview_turn called with state.status={state.status!r}; "
+        f"caller must lock the state to PROCESSING first."
+    )
 
     # ─── Post placeholder message ────────────────────────────────────
     try:
@@ -404,18 +417,39 @@ def _run_interview_turn(
                 # Re-check phase after review
                 phase = detect_phase(history, state)
             else:
-                # Review failed (timeout, API error, etc.). Do NOT mark
-                # review_completed — the next turn will retry. Fall through
-                # to the drafting phase so the user experience continues,
-                # but the ticket won't have review enrichments unless a
-                # retry succeeds.
-                logger.warning(
-                    f"Review gate failed for thread {thread_ts}; will retry "
-                    f"on next turn. Error: {review.error}"
-                )
-                # Proceed to drafting so the conversation doesn't stall.
-                # detect_phase will return "review" again next turn, giving
-                # us another attempt.
+                new_attempts = state.review_attempts + 1
+                if new_attempts >= MAX_REVIEW_ATTEMPTS:
+                    # Give up — mark review as completed with empty results so the
+                    # conversation can proceed without further retries. The ticket
+                    # won't have enrichments, but the user won't be stuck eating
+                    # 30s of latency on every turn.
+                    logger.warning(
+                        f"Review gate failed {new_attempts} times for thread {thread_ts}. "
+                        f"Giving up and proceeding without enrichments. Error: {review.error}"
+                    )
+                    update_state(
+                        thread_ts,
+                        review_completed=True,
+                        review_gaps_json=json.dumps([]),
+                        review_enrichments_json=json.dumps([]),
+                        review_turn_index=len(history),
+                        review_attempts=new_attempts,
+                    )
+                    state.review_completed = True
+                    state.review_gaps_json = "[]"
+                    state.review_enrichments_json = "[]"
+                    state.review_turn_index = len(history)
+                    state.review_attempts = new_attempts
+                else:
+                    logger.warning(
+                        f"Review gate failed for thread {thread_ts} "
+                        f"(attempt {new_attempts}/{MAX_REVIEW_ATTEMPTS}). "
+                        f"Will retry on next turn. Error: {review.error}"
+                    )
+                    update_state(thread_ts, review_attempts=new_attempts)
+                    state.review_attempts = new_attempts
+
+                # In both cases, proceed to drafting so the conversation keeps moving.
                 phase = "drafting"
 
 
