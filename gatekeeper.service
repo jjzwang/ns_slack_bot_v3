@@ -1,0 +1,46 @@
+=============================================================================
+
+Deployment via Systemd (Alternative to Docker)
+
+=============================================================================
+
+1. Place this file in /etc/systemd/system/gatekeeper.service
+
+2. Update the User, Group, and WorkingDirectory paths
+
+3. Run: sudo systemctl daemon-reload
+
+4. Run: sudo systemctl enable --now gatekeeper
+
+=============================================================================
+
+[Unit]
+Description=NetSuite Requirement Gatekeeper (Slack Bot)
+After=network.target
+
+[Service]
+
+Ensure the bot runs under a non-root user
+
+User=ubuntu
+Group=ubuntu
+
+Update to where you cloned the repo
+
+WorkingDirectory=/opt/ns_slack_bot_v3
+
+Use the virtual environment's python
+
+ExecStart=/opt/ns_slack_bot_v3/venv/bin/python app.py
+
+Automatically restart if the app crashes
+
+Restart=always
+RestartSec=5
+
+Keep logs unbuffered
+
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
