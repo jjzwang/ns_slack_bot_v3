@@ -51,7 +51,7 @@ from database import (
 )
 from identity import UserIdentity, resolve_user_identity
 from jira_client import create_jira_ticket
-from prompt_builder import detect_phase
+from prompt_builder import detect_phase, _VERIFY_MARKERS
 from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_review_gate
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
@@ -467,14 +467,32 @@ def _run_interview_turn(
                 text=result.text,
             )
 
+            state_updates = {
+                "status": STATUS_INTERVIEW,
+                "message_history": json.dumps(history),
+            }
+
+            if not getattr(state, "is_verifying", False) and any(marker in result.text for marker in _VERIFY_MARKERS):
+                state_updates["is_verifying"] = True
+                state.is_verifying = True
+
             update_state(
                 thread_ts,
-                status=STATUS_INTERVIEW,
-                message_history=json.dumps(history),
+                **state_updates
             )
+            
 
         # ─── Route: Submit Ticket ────────────────────────────────────
         elif isinstance(result, SubmitTicketResponse):
+            #Guard against hallucinated/early tool calls
+            if not getattr(state, "is_verifying", False):
+                logger.warning(f"Claude attempted early submit_ticket in thread {thread_ts}. Rejecting.")
+                error_text = "I have all the details I need! Let me summarize them for you to review before we submit."
+                history.append({"role": "assistant", "content": error_text})
+                client.chat_update(channel=channel_id, ts=placeholder_ts, text=error_text)
+                update_state(thread_ts, status=STATUS_INTERVIEW, message_history=json.dumps(history))
+                return
+            
             client.chat_update(
                 channel=channel_id,
                 ts=placeholder_ts,
@@ -558,14 +576,17 @@ def _run_interview_turn(
 
     except Exception as e:
         logger.exception(f"Error in interview turn for thread {thread_ts}")
+        error_text = "Something went wrong on my end. Could you repeat your last message?"
         try:
             client.chat_update(
                 channel=channel_id,
                 ts=placeholder_ts,
-                text="Something went wrong on my end. Could you repeat your last message?",
+                text=error_text,
             )
         except Exception:
             pass
+
+        history.append({"role": "assistant", "content": error_text})
         # Save history even on error so the user's last message isn't lost
         update_state(
             thread_ts,

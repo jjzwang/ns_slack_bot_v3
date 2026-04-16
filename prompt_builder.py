@@ -31,6 +31,8 @@ def detect_phase(history: list[dict], state: InterviewState) -> str:
         post_review_messages = _get_messages_after_review(history, state)
         if not _contains_ac_markers(post_review_messages):
             return "gathering_with_gaps"
+    if getattr(state, "is_verifying", False):
+        return "verify"
     if _contains_verify_markers(history):
         return "verify"
     return "drafting"

@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 _ALLOWED_UPDATE_COLUMNS = {
     "status", "message_history", "pillars_json", "attempts",
     "review_completed", "review_gaps_json", "review_enrichments_json",
-    "review_turn_index", "review_attempts", "updated_at",
+    "review_turn_index", "review_attempts", "updated_at","is_verifying"
 }
 
 _ALLOWED_MIGRATION_COLUMNS = {
     "review_completed", "review_gaps_json",
     "review_enrichments_json", "review_turn_index",
-    "review_attempts",
+    "review_attempts","is_verifying"
 }
 # ─── Connection Pool ─────────────────────────────────────────────────────────
 
@@ -102,7 +102,8 @@ def init_db() -> None:
                     review_turn_index       INTEGER NOT NULL DEFAULT -1,
                     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    review_attempts         INTEGER NOT NULL DEFAULT 0
+                    review_attempts         INTEGER NOT NULL DEFAULT 0,
+                    is_verifying            BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_interview_state_status ON interview_state (status)")
@@ -152,6 +153,7 @@ class InterviewState:
     review_enrichments_json: str = "[]"
     review_turn_index: int = -1
     review_attempts: int = 0
+    is_verifying: bool = False
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -241,9 +243,9 @@ def create_state(state: InterviewState) -> None:
                     (thread_id, channel_id, user_id, user_email, user_jira_id,
                      user_display_name, status, pillars_json, message_history,
                      attempts, review_completed, review_gaps_json,
-                     review_enrichments_json, review_turn_index, review_attempts,
+                     review_enrichments_json, review_turn_index, review_attempts,is_verifying
                      created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s)
                 """,
                 (
                     state.thread_id, state.channel_id, state.user_id,
@@ -251,7 +253,7 @@ def create_state(state: InterviewState) -> None:
                     state.status, state.pillars_json, state.message_history,
                     state.attempts, state.review_completed, state.review_gaps_json,
                     state.review_enrichments_json, state.review_turn_index,
-                    state.review_attempts,
+                    state.review_attempts,state.is_verifying,
                     state.created_at, state.updated_at,
                 ),
             )
