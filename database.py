@@ -114,6 +114,7 @@ def init_db() -> None:
             _migrate_add_column(cur, "review_enrichments_json", "JSONB NOT NULL DEFAULT '[]'::jsonb")
             _migrate_add_column(cur, "review_turn_index", "INTEGER NOT NULL DEFAULT -1")
             _migrate_add_column(cur, "review_attempts", "INTEGER NOT NULL DEFAULT 0")
+            _migrate_add_column(cur, "is_verifying", "BOOLEAN NOT NULL DEFAULT FALSE")
         conn.commit()
         logger.info("Database initialized successfully.")
     except Exception:
@@ -243,7 +244,7 @@ def create_state(state: InterviewState) -> None:
                     (thread_id, channel_id, user_id, user_email, user_jira_id,
                      user_display_name, status, pillars_json, message_history,
                      attempts, review_completed, review_gaps_json,
-                     review_enrichments_json, review_turn_index, review_attempts,is_verifying
+                     review_enrichments_json, review_turn_index, review_attempts, is_verifying,
                      created_at, updated_at)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s)
                 """,

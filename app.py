@@ -300,18 +300,22 @@ def handle_message(event, client):
                 f"Thread {thread_ts} exceeded {MAX_CONVERSATION_TURNS} user turns. "
                 f"Forcing escalation."
             )
-            _force_escalation(
-                client=client,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                user_id=user_id,
-                state=state,
-                history=history,
-                reason=(
-                    f"Conversation exceeded {MAX_CONVERSATION_TURNS} turns without "
-                    f"reaching a verified ticket. Auto-escalated."
-                ),
-            )
+            try:
+                _force_escalation(
+                    client=client,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                    state=state,
+                    history=history,
+                    reason=(
+                        f"Conversation exceeded {MAX_CONVERSATION_TURNS} turns without "
+                        f"reaching a verified ticket. Auto-escalated."
+                    ),
+                )
+            except Exception:
+                logger.exception(f"Force escalation failed for thread {thread_ts}. Resetting to INTERVIEW.")
+                update_state(thread_ts, status=STATUS_INTERVIEW)
             return
 
         _run_interview_turn(
@@ -611,16 +615,9 @@ def _force_escalation(
     """Force-escalate when the app-level turn limit is exceeded."""
     partial_data = state.get_pillars()
 
-    client.chat_postMessage(
-        channel=channel_id,
-        thread_ts=thread_ts,
-        text=(
-            "This one seems complex — let me escalate to a BA who can "
-            "hop on a quick call with you."
-        ),
-    )
-
-    # _post_escalation owns all state writes; pass history so it's saved once.
+    # _post_escalation owns the single user-facing message and all state writes.
+    # Do NOT post a separate message here — that would produce a double message
+    # since _post_escalation also posts when placeholder_ts is None.
     _post_escalation(
         client=client,
         channel_id=channel_id,
@@ -670,23 +667,33 @@ def _post_escalation(
             f"Error: {e}"
         )
 
-    # Notify user — overwrite placeholder if available, otherwise post new message
+    # Notify user — overwrite placeholder if available, otherwise post new message.
+    # Wrapped in try/except so a transient Slack error doesn't prevent the state
+    # write below; without this guard, the triage channel would be notified but the
+    # row would stay at STATUS_PROCESSING (or be reset to INTERVIEW by the outer
+    # except in _run_interview_turn), creating an inconsistency.
     user_text = (
-        "I've connected you with the team for additional help. "
-        "A business analyst will follow up with you shortly."
+        "This one seems complex — let me escalate to a BA who can "
+        "hop on a quick call with you. A business analyst will follow up shortly."
     )
 
-    if placeholder_ts:
-        client.chat_update(
-            channel=channel_id,
-            ts=placeholder_ts,
-            text=user_text,
-        )
-    else:
-        client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=thread_ts,
-            text=user_text,
+    try:
+        if placeholder_ts:
+            client.chat_update(
+                channel=channel_id,
+                ts=placeholder_ts,
+                text=user_text,
+            )
+        else:
+            client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                text=user_text,
+            )
+    except Exception as e:
+        logger.warning(
+            f"Could not deliver escalation message to user in thread {thread_ts}: {e}. "
+            f"State will still be written as ESCALATED."
         )
 
     # Single state write — include message_history when the caller provides it.
