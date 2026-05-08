@@ -1,0 +1,296 @@
+# NetSuite Domain Pack — Configuration
+#
+# ⚠️  UNWIRED — TARGET STATE, NOT RUNTIME STATE.
+#     Nothing in the current codebase loads this file. The running bot uses
+#     four pillars (persona, action, goal, business_value) defined in
+#     config.py FULL_PROMPT and reviewer.EXTRACTION_PROMPT. The six pillars
+#     below are the Phase 3 target (config-driven domains). Editing this
+#     file today has no effect.
+#
+# This file defines the six requirement pillars, gate rules, and follow-up
+# triggers for NetSuite change requests. Edit this file to refine the
+# interview without touching code. Restart the bot to pick up changes.
+#
+# Schema reference: docs/DOMAIN_PACK_SPEC.md
+# System prompt: domains/netsuite/system_prompt.md
+# Field mapping: domains/netsuite/ticket_template.py
+
+name: netsuite
+display_name: NetSuite
+version: 1
+description: >
+  Requirement gathering for NetSuite changes — saved searches, workflows,
+  SuiteScript, custom records, integrations, and configuration changes.
+
+# ---------------------------------------------------------------------------
+# Pillars
+# ---------------------------------------------------------------------------
+# Each pillar is one dimension of the requirement the BSA is trying to
+# capture. Order matters — the interview generally proceeds top-to-bottom,
+# though the engine may revisit pillars when answers reveal gaps elsewhere.
+#
+# Fields:
+#   key            — stable identifier, snake_case, used in code and tickets
+#   display_name   — human-friendly name shown in summaries
+#   description    — what the BSA is trying to capture; used in extraction prompt
+#   required       — if false, the gate will warn but not block on missing answers
+#   examples       — good answer examples; included in the extraction prompt
+#                    to anchor what "complete" looks like
+# ---------------------------------------------------------------------------
+
+pillars:
+  - key: business_context
+    display_name: Business Context & Value
+    description: >
+      Why this change matters to the business. The problem being solved,
+      the cost of the status quo, who benefits, and what success looks like
+      in business terms (revenue, hours saved, risk reduced, compliance met).
+    required: true
+    examples:
+      - >
+        AP team currently exports vendor bills to Excel weekly to reconcile
+        against bank statements. Takes ~6 hours/week. Errors caught late
+        (avg 2 weeks) cause month-end delays. Auto-matching saves ~5 hrs/week
+        and cuts close cycle by 1 day.
+      - >
+        Sales ops needs commission calculations to factor in product-line
+        margin, not just revenue. Today they recalculate manually after
+        close, delaying payouts by 5 days and creating ~$15K/quarter in
+        disputes.
+
+  - key: scope_and_components
+    display_name: Scope & NetSuite Components
+    description: >
+      Which NetSuite objects, records, scripts, workflows, saved searches,
+      or integrations are affected. Be specific about record types, field
+      names, and existing customizations that will be touched or extended.
+    required: true
+    examples:
+      - >
+        Modify saved search 'AP Aging Detail' to add a new column for
+        approval status. Create new workflow on Vendor Bill record that
+        triggers on approval > $10K. No SuiteScript changes.
+      - >
+        New Suitelet to expose commission tier configuration. Modify
+        existing User Event script on Sales Order (commissionCalc.js) to
+        read tier from new custom record (customrecord_commission_tier).
+
+  - key: user_impact
+    display_name: User Impact & Roles
+    description: >
+      Who will use this, what roles need access, what their day-to-day
+      experience changes, and what training or change management is needed.
+      Include both end users and administrators.
+    required: true
+    examples:
+      - >
+        AP Clerks (12 users) — new approval queue in their dashboard;
+        20-min training. AP Manager (1 user) — new approval workflow;
+        15-min walkthrough. Controller (1 user) — read-only audit view.
+      - >
+        Sales reps (45 users) — no UX change, just see correct numbers.
+        Sales ops admins (3 users) — new tier config UI; 1-hr training
+        session before go-live.
+
+  - key: data_and_integrations
+    display_name: Data & Integrations
+    description: >
+      Data migration, backfill, or transformation needs. Upstream/downstream
+      systems affected (Salesforce, Concur, Avalara, custom EDI, etc.).
+      File feeds, web services, scheduled jobs that touch this data.
+    required: true
+    examples:
+      - >
+        No data migration. Existing vendor bills will pick up new approval
+        status from go-live. No upstream/downstream impact — change is
+        contained within NetSuite AP module.
+      - >
+        Backfill 18 months of historical sales orders with new commission
+        tier (~120K records). One-time SuiteScript scheduled job.
+        Integration with Salesforce CPQ unchanged. Data warehouse ETL
+        needs updated column mapping (coordinated with data team).
+
+  - key: testing_and_acceptance
+    display_name: Testing & Acceptance Criteria
+    description: >
+      Specific, testable conditions that define "done." Include happy path,
+      edge cases, error handling, and who validates each. Sandbox testing
+      plan and UAT plan if applicable.
+    required: true
+    examples:
+      - >
+        AC1: Vendor bills > $10K route to AP Manager queue. AC2: Bills
+        ≤ $10K auto-approve as today. AC3: Rejection returns bill to
+        Clerk with comment field populated. AC4: Audit log captures
+        approver, timestamp, decision. UAT: AP Manager + 2 Clerks in
+        sandbox for 1 week before prod.
+      - >
+        AC1: Commission for Order #X (mixed product lines) matches
+        spreadsheet calc to the cent. AC2: Tier changes mid-quarter
+        recalculate prospectively, not retroactively. AC3: Disputes
+        workflow unchanged. UAT: Sales ops lead signs off on 20
+        sample orders.
+
+  - key: enablement_and_rollout
+    display_name: Enablement & Rollout Plan
+    description: >
+      How this gets deployed and adopted. Sandbox-to-prod path, comms plan,
+      training materials, support model post-launch, rollback plan if
+      something goes wrong.
+    required: true
+    examples:
+      - >
+        Deploy to sandbox week 1. UAT week 2. Prod deploy Friday after
+        month-end close. Slack announcement to #ap-team day-of. Quick-
+        reference guide in Confluence. Support: AP Manager triages for
+        first 2 weeks, escalates to BSA if needed. Rollback: disable
+        workflow (no data migration to reverse).
+      - >
+        Phased rollout: pilot with West region (15 reps) for 2 weeks,
+        then nationwide. Training: pre-recorded video + live Q&A.
+        Support model: sales ops handles tier-1, BSA handles tier-2.
+        Rollback: feature flag on calc script reverts to legacy logic.
+
+# ---------------------------------------------------------------------------
+# Gate rules
+# ---------------------------------------------------------------------------
+# Run after all required pillars have answers. If any "block" rule fires,
+# the requirement is ESCALATED rather than auto-promoted to a Jira ticket.
+# "warn" rules are noted in the ticket but don't block. "info" rules are
+# logged for analytics but invisible to the user.
+# ---------------------------------------------------------------------------
+
+gate_rules:
+  - key: business_value_quantified
+    severity: block
+    description: >
+      Business context must include at least one quantified impact —
+      hours saved, dollars affected, risk reduced with magnitude, etc.
+      "Improves efficiency" without numbers fails this gate.
+
+  - key: testable_acceptance_criteria
+    severity: block
+    description: >
+      Acceptance criteria must be specific and testable. Each AC should
+      describe an observable outcome a tester can verify. Vague ACs like
+      "system works correctly" fail this gate.
+
+  - key: scope_components_named
+    severity: block
+    description: >
+      Scope must name specific NetSuite components — record types, script
+      names, workflow names, saved search names, or integration endpoints.
+      Generic statements like "update the AP module" fail this gate.
+
+  - key: rollback_plan_present
+    severity: warn
+    description: >
+      Enablement plan should describe how to roll back if the change
+      causes problems. Not strictly required for low-risk changes but
+      flagged for reviewer attention.
+
+  - key: cross_team_dependencies
+    severity: warn
+    description: >
+      If data_and_integrations mentions external systems (Salesforce,
+      data warehouse, third-party feeds), confirm the relevant teams have
+      been notified. Flag for reviewer if unclear.
+
+  - key: training_for_user_count
+    severity: info
+    description: >
+      Track requests where >10 users are impacted but training plan is
+      under 30 minutes. Used for analytics on training adequacy, not
+      enforced.
+
+# ---------------------------------------------------------------------------
+# Follow-up triggers
+# ---------------------------------------------------------------------------
+# When pillar extraction returns an answer that matches a trigger pattern,
+# the engine asks the corresponding follow-up question before moving on.
+# This is how we encode BSA judgment about thin answers.
+#
+# Patterns are checked against the extracted pillar value (not raw user
+# message). Matching is case-insensitive substring unless `regex: true`.
+# ---------------------------------------------------------------------------
+
+followup_triggers:
+  - pillar: business_context
+    pattern: "improve efficiency"
+    followup: >
+      Can you put a number on the efficiency gain? For example, hours
+      saved per week, percent reduction in errors, or dollars affected
+      per quarter. Vague benefits are hard to prioritize against other
+      requests.
+
+  - pillar: business_context
+    pattern: "save time"
+    followup: >
+      How much time, for whom, and how often? "Saves the AP team about
+      4 hours per week" is much more actionable than "saves time."
+
+  - pillar: scope_and_components
+    pattern: "the workflow"
+    followup: >
+      Which workflow specifically? If you know the name in NetSuite,
+      share it. If not, describe what the workflow does and which record
+      type it runs on (Vendor Bill, Sales Order, etc.).
+
+  - pillar: scope_and_components
+    pattern: "some script"
+    followup: >
+      Can you find the script name in NetSuite? It's usually on the
+      Customization > Scripting > Scripts list. If you can't, describe
+      what triggers the script and what record it operates on.
+
+  - pillar: testing_and_acceptance
+    pattern: "works correctly"
+    followup: >
+      What does "works correctly" look like in practice? Try to write
+      it as something a tester could check — for example, "When a bill
+      over $10K is submitted, it appears in the AP Manager's approval
+      queue within 1 minute."
+
+  - pillar: testing_and_acceptance
+    pattern: "user accepts"
+    followup: >
+      Which user, and what specifically are they accepting? Naming the
+      person and the artifact (a sandbox demo, a UAT script, a sample
+      report) makes acceptance concrete.
+
+  - pillar: enablement_and_rollout
+    pattern: "no rollback"
+    followup: >
+      Even low-risk changes benefit from a documented rollback. What's
+      the simplest way to undo this if it causes problems — disable a
+      workflow, revert a script deployment, restore a saved search? If
+      truly no rollback is possible (e.g. data transformation), flag
+      that explicitly so reviewers can weigh the risk.
+
+  - pillar: data_and_integrations
+    pattern: "no impact"
+    followup: >
+      Just to confirm — no upstream system feeds the affected records,
+      and no downstream system reads them? Common ones to double-check
+      are Salesforce, the data warehouse, Concur, Avalara, and any
+      custom EDI feeds.
+
+# ---------------------------------------------------------------------------
+# Interview behavior tuning
+# ---------------------------------------------------------------------------
+# Engine-level knobs the domain pack can override. Defaults are in
+# engine/config.py.
+# ---------------------------------------------------------------------------
+
+interview_behavior:
+  max_followups_per_pillar: 2
+  # If the user gives a thin answer twice in a row on the same pillar,
+  # the engine moves on and flags the pillar as "weak" for the gate.
+
+  allow_pillar_revisit: true
+  # If the user references an earlier pillar in a later answer, the
+  # engine can update that pillar rather than ignoring the new context.
+
+  escalate_after_failed_gates: 2
+  # If the gate fails twice on the same thread (user revises, gate
+  # fails again), escalate to a human BSA rather than looping.
