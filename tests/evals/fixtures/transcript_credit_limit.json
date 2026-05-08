@@ -1,0 +1,33 @@
+{
+  "name": "credit_limit_basic",
+  "description": "AP Clerk requesting credit-limit block on sales orders. All four core pillars stated explicitly across 3 user turns.",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hi, I'd like to create a new NetSuite requirement ticket. Here's what I need: when an AP Clerk submits a sales order over the customer's credit limit, NetSuite should block approval and show a warning."
+    },
+    {
+      "role": "assistant",
+      "content": "Got it. What problem does this solve?"
+    },
+    {
+      "role": "user",
+      "content": "Right now we have to chase invoices that should never have shipped. Couple of times a quarter we eat the loss. We want to avoid revenue leakage and stop processing orders that are over-credit."
+    },
+    {
+      "role": "assistant",
+      "content": "Makes sense — does this apply to all subsidiaries?"
+    },
+    {
+      "role": "user",
+      "content": "All US subsidiaries for now. The credit team wants this to enforce the credit policy and reduce manual reconciliation work."
+    }
+  ],
+  "expected_pillars": {
+    "persona": "AP Clerk",
+    "action": "Block sales order approval when over customer credit limit",
+    "goal": "Stop processing orders that exceed credit limit",
+    "business_value": "Avoid revenue leakage and reduce manual reconciliation"
+  },
+  "mocked_claude_response": "{\"persona\": \"AP Clerk\", \"action\": \"Block sales order approval when over customer credit limit\", \"goal\": \"Stop processing orders that exceed credit limit\", \"business_value\": \"Avoid revenue leakage and reduce manual reconciliation\"}"
+}
