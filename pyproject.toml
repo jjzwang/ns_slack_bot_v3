@@ -1,0 +1,76 @@
+# =============================================================================
+# Tooling configuration — Phase 0
+# =============================================================================
+# Project metadata is intentionally minimal. We're not packaging this for PyPI;
+# the file exists to centralize ruff / black / mypy / pytest config.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501", # line-too-long — black handles wrapping
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*" = ["B", "SIM"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+pythonpath = ["."]
+addopts = "-v --tb=short --strict-markers"
+
+# =============================================================================
+# Mypy — strict-on-new-code, baseline ignore for existing flat modules
+# =============================================================================
+# Strategy:
+#   - strict = true at root, so any new module under engine/, transports/,
+#     domains/, outputs/, or config/ inherits the full strict gate.
+#   - Each existing top-level module is listed in an override that turns off
+#     error reporting until that module is touched in Phase 1+. This avoids a
+#     multi-day type-fixing detour before the refactor work begins.
+#   - Tests are also exempted — they reach into private helpers and use
+#     untyped fixtures.
+# When a legacy module gets refactored in a later phase, drop it from the
+# override list and let strict mode catch the gaps.
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app",
+    "claude_client",
+    "config",
+    "database",
+    "identity",
+    "jira_client",
+    "log_context",
+    "prompt_builder",
+    "review_prompts",
+    "reviewer",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
