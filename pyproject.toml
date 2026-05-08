@@ -25,6 +25,19 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["B", "SIM"]
+# Legacy flat modules: keep basic correctness (E, F, W, I) but skip
+# stylistic / modernization rules until each module is refactored in Phase 1+.
+# Mirrors the mypy override list below — when a module gets carved into the
+# new layered structure, drop it from both lists and let strict rules apply.
+"app.py" = ["B", "UP", "C4", "SIM"]
+"claude_client.py" = ["B", "UP", "C4", "SIM"]
+"config.py" = ["B", "UP", "C4", "SIM"]
+"database.py" = ["B", "UP", "C4", "SIM"]
+"identity.py" = ["B", "UP", "C4", "SIM"]
+"jira_client.py" = ["B", "UP", "C4", "SIM"]
+"prompt_builder.py" = ["B", "UP", "C4", "SIM"]
+"review_prompts.py" = ["B", "UP", "C4", "SIM"]
+"reviewer.py" = ["B", "UP", "C4", "SIM"]
 
 [tool.black]
 line-length = 100

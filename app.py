@@ -18,18 +18,6 @@ import json
 import logging
 import os
 
-# IMPORTANT: config.py calls load_dotenv() at its top before any os.environ.get()
-# so we import it first. Do not reorder imports without reading config.py.
-from config import (
-    MAX_CONVERSATION_TURNS,
-    MAX_REVIEW_ATTEMPTS,
-    STATUS_ESCALATED,
-    STATUS_INTERVIEW,
-    STATUS_PROCESSING,
-    STATUS_READY,
-    TRIAGE_CHANNEL_ID,
-    validate_config,
-)
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -40,6 +28,20 @@ from claude_client import (
     call_claude,
 )
 
+# config.py calls load_dotenv() at its top before any os.environ.get(). Any
+# import of a local module (claude_client, database, ...) transitively imports
+# config, so load_dotenv runs before any module-level os.environ read in this
+# package. Order within the local-import block is therefore safe.
+from config import (
+    MAX_CONVERSATION_TURNS,
+    MAX_REVIEW_ATTEMPTS,
+    STATUS_ESCALATED,
+    STATUS_INTERVIEW,
+    STATUS_PROCESSING,
+    STATUS_READY,
+    TRIAGE_CHANNEL_ID,
+    validate_config,
+)
 from database import (
     InterviewState,
     close_pool,
@@ -51,12 +53,12 @@ from database import (
 )
 from identity import UserIdentity, resolve_user_identity
 from jira_client import create_jira_ticket
-from prompt_builder import detect_phase, _VERIFY_MARKERS
+from log_context import ThreadContextFilter, thread_context
+from prompt_builder import _VERIFY_MARKERS, detect_phase
 from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_review_gate
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 
-from log_context import ThreadContextFilter, thread_context
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +68,7 @@ logging.basicConfig(
 # not just app.py's. This includes claude_client, reviewer, jira_client, etc.
 logging.getLogger().addFilter(ThreadContextFilter())
 logger = logging.getLogger(__name__)
+
 
 def _safe_update_or_post(
     client,
@@ -99,6 +102,7 @@ def _safe_update_or_post(
             f"User will not see the terminal message. Text was: {text!r}"
         )
 
+
 # Validate all required env vars before touching any external service.
 # Raises ValueError with a clear list of what's missing.
 validate_config()
@@ -127,6 +131,7 @@ atexit.register(close_pool)
 # Slash Command: /netsuite-new-change
 # =============================================================================
 
+
 @app.command("/netsuite-new-change")
 def handle_slash_command(ack, command, client, respond):
     """Start a new interview when a user runs /netsuite-new-change."""
@@ -145,7 +150,7 @@ def handle_slash_command(ack, command, client, respond):
                 "Please click on my name under **Apps** in your left sidebar "
                 "and run this command in a Direct Message with me."
             ),
-            response_type="ephemeral"
+            response_type="ephemeral",
         )
         return
     # ────────────────────────────────────────────────────────────────────────────
@@ -207,23 +212,24 @@ def handle_slash_command(ack, command, client, respond):
 # Message Event: Thread Replies
 # =============================================================================
 
+
 @app.event("message")
 def handle_message(event, client):
     """Handle replies in active interview threads."""
-    
+
     # Ignore bot messages (prevent loops) and system events
     if event.get("bot_id") or event.get("subtype"):
         return
 
     channel_id = event.get("channel", "")
     thread_ts = event.get("thread_ts")
-    
+
     # ─── UX Enhancement: Nudge user if they aren't using threads ────────────────
     if not thread_ts:
         if channel_id.startswith("D"):
             client.chat_postMessage(
                 channel=channel_id,
-                text="💡 To start a new request, please type `/netsuite-new-change`. To continue an existing request, please reply directly in its thread!"
+                text="💡 To start a new request, please type `/netsuite-new-change`. To continue an existing request, please reply directly in its thread!",
             )
         return
     # ────────────────────────────────────────────────────────────────────────────
@@ -252,7 +258,7 @@ def handle_message(event, client):
     if state is None:
         # Not an active interview thread — ignore
         return
-    
+
     with thread_context(thread_ts):
         # Guard: already done or escalated (no lock needed)
         if state.status == STATUS_READY:
@@ -280,8 +286,10 @@ def handle_message(event, client):
         # Atomic lock: only proceed if status transitions from INTERVIEW → PROCESSING
         # This prevents race conditions when two messages arrive close together.
         if not try_lock_state(thread_ts, STATUS_INTERVIEW, STATUS_PROCESSING):
-            logger.info(f"Thread {thread_ts} could not acquire lock (status is not INTERVIEW). Skipping.")
-            return  
+            logger.info(
+                f"Thread {thread_ts} could not acquire lock (status is not INTERVIEW). Skipping."
+            )
+            return
 
         # Re-read state after acquiring lock to get fresh data
         state = get_state(thread_ts)
@@ -314,7 +322,9 @@ def handle_message(event, client):
                     ),
                 )
             except Exception:
-                logger.exception(f"Force escalation failed for thread {thread_ts}. Resetting to INTERVIEW.")
+                logger.exception(
+                    f"Force escalation failed for thread {thread_ts}. Resetting to INTERVIEW."
+                )
                 update_state(thread_ts, status=STATUS_INTERVIEW)
             return
 
@@ -331,6 +341,7 @@ def handle_message(event, client):
 # =============================================================================
 # Core Interview Turn
 # =============================================================================
+
 
 def _run_interview_turn(
     client,
@@ -456,7 +467,6 @@ def _run_interview_turn(
                 # In both cases, proceed to drafting so the conversation keeps moving.
                 phase = "drafting"
 
-
         # ─── Step 3: BSA Response (normal Claude call) ───────────────
         # Pass the already-computed phase so assemble_prompt doesn't re-detect.
         result = call_claude(history, _ANTHROPIC_API_KEY, state=state, phase=phase)
@@ -476,27 +486,29 @@ def _run_interview_turn(
                 "message_history": json.dumps(history),
             }
 
-            if not getattr(state, "is_verifying", False) and any(marker in result.text for marker in _VERIFY_MARKERS):
+            if not getattr(state, "is_verifying", False) and any(
+                marker in result.text for marker in _VERIFY_MARKERS
+            ):
                 state_updates["is_verifying"] = True
                 state.is_verifying = True
 
-            update_state(
-                thread_ts,
-                **state_updates
-            )
-            
+            update_state(thread_ts, **state_updates)
 
         # ─── Route: Submit Ticket ────────────────────────────────────
         elif isinstance(result, SubmitTicketResponse):
-            #Guard against hallucinated/early tool calls
+            # Guard against hallucinated/early tool calls
             if not getattr(state, "is_verifying", False):
-                logger.warning(f"Claude attempted early submit_ticket in thread {thread_ts}. Rejecting.")
+                logger.warning(
+                    f"Claude attempted early submit_ticket in thread {thread_ts}. Rejecting."
+                )
                 error_text = "I have all the details I need! Let me summarize them for you to review before we submit."
                 history.append({"role": "assistant", "content": error_text})
                 client.chat_update(channel=channel_id, ts=placeholder_ts, text=error_text)
-                update_state(thread_ts, status=STATUS_INTERVIEW, message_history=json.dumps(history))
+                update_state(
+                    thread_ts, status=STATUS_INTERVIEW, message_history=json.dumps(history)
+                )
                 return
-            
+
             client.chat_update(
                 channel=channel_id,
                 ts=placeholder_ts,
@@ -524,22 +536,22 @@ def _run_interview_turn(
                     f"• Acceptance Criteria (Given/When/Then)\n• Enablement Plan"
                     + ("\n• Implementation Notes (from solution review)" if enrichments else "")
                 )
-                _safe_update_or_post(
-                    client, channel_id, thread_ts, placeholder_ts, success_text
-                )
+                _safe_update_or_post(client, channel_id, thread_ts, placeholder_ts, success_text)
                 # Append assistant reply so history is complete before saving.
                 history.append({"role": "assistant", "content": success_text})
                 update_state(
                     thread_ts,
                     status=STATUS_READY,
                     message_history=json.dumps(history),
-                    pillars_json=json.dumps({
-                        "title": result.title,
-                        "description": result.description,
-                        "value_to_business": result.value_to_business,
-                        "acceptance_criteria": result.acceptance_criteria,
-                        "enablement_plan": result.enablement_plan,
-                    }),
+                    pillars_json=json.dumps(
+                        {
+                            "title": result.title,
+                            "description": result.description,
+                            "value_to_business": result.value_to_business,
+                            "acceptance_criteria": result.acceptance_criteria,
+                            "enablement_plan": result.enablement_plan,
+                        }
+                    ),
                 )
             else:
                 # jira_result.error contains the sanitised message from jira_client;
@@ -548,9 +560,7 @@ def _run_interview_turn(
                     "⚠️ Your ticket was verified but Jira creation failed. "
                     "Your data has been saved — please contact your admin."
                 )
-                _safe_update_or_post(
-                    client, channel_id, thread_ts, placeholder_ts, failure_text
-                )
+                _safe_update_or_post(client, channel_id, thread_ts, placeholder_ts, failure_text)
                 logger.error(f"Jira creation failed for thread {thread_ts}: {jira_result.error}")
                 history.append({"role": "assistant", "content": failure_text})
                 update_state(
@@ -602,6 +612,7 @@ def _run_interview_turn(
 # =============================================================================
 # Escalation Helpers
 # =============================================================================
+
 
 def _force_escalation(
     client,
@@ -714,8 +725,7 @@ if __name__ == "__main__":
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
         raise ValueError(
-            "SLACK_APP_TOKEN not set. "
-            "Generate an app-level token with connections:write scope."
+            "SLACK_APP_TOKEN not set. " "Generate an app-level token with connections:write scope."
         )
 
     logger.info("⚡ NetSuite Gatekeeper bot starting (Socket Mode)...")

@@ -51,9 +51,7 @@ def resolve_user_identity(slack_user_id: str, slack_client) -> UserIdentity:
             profile = result.get("user", {}).get("profile", {})
             identity.email = profile.get("email")
             identity.display_name = (
-                profile.get("display_name")
-                or profile.get("real_name")
-                or "Unknown User"
+                profile.get("display_name") or profile.get("real_name") or "Unknown User"
             )
     except Exception as e:
         logger.error(f"Slack user lookup failed for {slack_user_id}: {e}")

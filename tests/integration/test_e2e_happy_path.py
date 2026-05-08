@@ -26,7 +26,6 @@ from config import STATUS_INTERVIEW, STATUS_PROCESSING, STATUS_READY
 from database import InterviewState
 from jira_client import JiraCreateResult
 
-
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
 
@@ -71,7 +70,10 @@ def verifying_state() -> InterviewState:
         message_history=json.dumps(
             [
                 {"role": "user", "content": "I want to block over-credit sales orders."},
-                {"role": "assistant", "content": "📋 Here's what will go into Jira. Is this correct?"},
+                {
+                    "role": "assistant",
+                    "content": "📋 Here's what will go into Jira. Is this correct?",
+                },
             ]
         ),
         review_completed=True,

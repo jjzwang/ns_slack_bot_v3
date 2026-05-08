@@ -349,14 +349,12 @@ END OF PLAYBOOK
 # =============================================================================
 
 PHASE_DIRECTIVES = {
-
     "gathering": """
 >>> CURRENT PHASE: GATHERING REQUIREMENTS
 You are collecting the core requirement details.
 Focus on: Action/Requirement, Scope, Persona, Goal, and Business Value.
 Do NOT draft Acceptance Criteria or present the Verify summary yet.
 """,
-
     "gathering_with_gaps": """
 >>> CURRENT PHASE: GATHERING — FOLLOW-UP ON REVIEW FINDINGS
 Core requirements were captured, but a solution review identified gaps.
@@ -365,7 +363,6 @@ unanswered gap in your next message. Follow your normal conversational style.
 Do NOT mention that a "review" happened. Do NOT draft Acceptance Criteria yet.
 Once all gaps are addressed in the conversation, proceed to draft acceptance criteria.
 """,
-
     "drafting": """
 >>> CURRENT PHASE: DRAFTING ACCEPTANCE CRITERIA & ENABLEMENT
 Core requirements are captured. Focus on:
@@ -373,7 +370,6 @@ Core requirements are captured. Focus on:
 2. Collect the Enablement Plan (UAT owner by name + training needs).
 Do NOT present the full Verify summary until both AC and Enablement are confirmed.
 """,
-
     "verify": """
 >>> CURRENT PHASE: VERIFY AND SUBMIT
 All pillars are gathered. Present the full Jira summary for user confirmation.
@@ -487,6 +483,7 @@ CLAUDE_TOOLS = [
 # =============================================================================
 # Startup Validation
 # =============================================================================
+
 
 def validate_config() -> None:
     """

@@ -54,7 +54,13 @@ def _strip_internal_tags(text: str) -> str:
     return text.strip()
 
 
-_SUBMIT_TICKET_REQUIRED = ["title", "description", "value_to_business", "acceptance_criteria", "enablement_plan"]
+_SUBMIT_TICKET_REQUIRED = [
+    "title",
+    "description",
+    "value_to_business",
+    "acceptance_criteria",
+    "enablement_plan",
+]
 
 
 def _validate_submit_ticket(inp: dict) -> SubmitTicketResponse:
@@ -140,8 +146,10 @@ def call_claude(
         except anthropic.RateLimitError as e:
             last_error = e
             if attempt < MAX_ATTEMPTS - 1:
-                wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                logger.warning(f"Rate limited. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
+                wait = INITIAL_BACKOFF_S * (2**attempt)
+                logger.warning(
+                    f"Rate limited. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})"
+                )
                 time.sleep(wait)
             else:
                 raise
@@ -150,8 +158,10 @@ def call_claude(
             if e.status_code >= 500:
                 last_error = e
                 if attempt < MAX_ATTEMPTS - 1:
-                    wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                    logger.warning(f"Server error {e.status_code}. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
+                    wait = INITIAL_BACKOFF_S * (2**attempt)
+                    logger.warning(
+                        f"Server error {e.status_code}. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})"
+                    )
                     time.sleep(wait)
                 else:
                     raise
@@ -161,8 +171,10 @@ def call_claude(
         except anthropic.APIConnectionError as e:
             last_error = e
             if attempt < MAX_ATTEMPTS - 1:
-                wait = INITIAL_BACKOFF_S * (2 ** attempt)
-                logger.warning(f"Connection error. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})")
+                wait = INITIAL_BACKOFF_S * (2**attempt)
+                logger.warning(
+                    f"Connection error. Retrying in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})"
+                )
                 time.sleep(wait)
             else:
                 raise

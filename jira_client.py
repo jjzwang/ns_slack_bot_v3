@@ -54,9 +54,15 @@ def create_jira_ticket(
         "issuetype": {"id": JIRA_CONFIG["issue_type_id"]},
         "summary": ticket_data.title,
         "description": description_adf,
-        JIRA_CONFIG["custom_fields"]["value_to_the_business"]: _to_adf_paragraphs(ticket_data.value_to_business),
-        JIRA_CONFIG["custom_fields"]["acceptance_criteria"]: _to_adf_ordered_list(ticket_data.acceptance_criteria),
-        JIRA_CONFIG["custom_fields"]["enablement_plan"]: _to_adf_paragraphs(ticket_data.enablement_plan),
+        JIRA_CONFIG["custom_fields"]["value_to_the_business"]: _to_adf_paragraphs(
+            ticket_data.value_to_business
+        ),
+        JIRA_CONFIG["custom_fields"]["acceptance_criteria"]: _to_adf_ordered_list(
+            ticket_data.acceptance_criteria
+        ),
+        JIRA_CONFIG["custom_fields"]["enablement_plan"]: _to_adf_paragraphs(
+            ticket_data.enablement_plan
+        ),
         **JIRA_CONFIG["defaults"],
     }
 
@@ -69,22 +75,39 @@ def create_jira_ticket(
 def _to_adf_paragraphs(text: str) -> dict:
     lines = [line for line in text.split("\n") if line.strip()]
     return {
-        "type": "doc", "version": 1,
-        "content": [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines],
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines
+        ],
     }
 
 
 def _to_adf_ordered_list(text: str) -> dict:
     items = [re.sub(r"^\d+[.)]\s*", "", line.strip()) for line in text.split("\n") if line.strip()]
     return {
-        "type": "doc", "version": 1,
-        "content": [{
-            "type": "orderedList", "attrs": {"order": 1},
-            "content": [{
-                "type": "listItem",
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": item, "marks": [{"type": "strong"}]}]}],
-            } for item in items],
-        }],
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "orderedList",
+                "attrs": {"order": 1},
+                "content": [
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [
+                                    {"type": "text", "text": item, "marks": [{"type": "strong"}]}
+                                ],
+                            }
+                        ],
+                    }
+                    for item in items
+                ],
+            }
+        ],
     }
 
 
@@ -108,14 +131,35 @@ def _to_adf_implementation_notes(enrichments: list[dict]) -> list[dict]:
             grouped.setdefault(e.get("category", "other"), []).append(detail)
     if not grouped:
         return []
-    nodes: list[dict] = [{"type": "heading", "attrs": {"level": 3}, "content": [{"type": "text", "text": "Implementation Notes"}]}]
+    nodes: list[dict] = [
+        {
+            "type": "heading",
+            "attrs": {"level": 3},
+            "content": [{"type": "text", "text": "Implementation Notes"}],
+        }
+    ]
     for category, items in grouped.items():
         label = labels.get(category, category.replace("_", " ").title())
-        nodes.append({"type": "paragraph", "content": [{"type": "text", "text": label, "marks": [{"type": "strong"}]}]})
-        nodes.append({"type": "bulletList", "content": [
-            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": item}]}]}
-            for item in items
-        ]})
+        nodes.append(
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": label, "marks": [{"type": "strong"}]}],
+            }
+        )
+        nodes.append(
+            {
+                "type": "bulletList",
+                "content": [
+                    {
+                        "type": "listItem",
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": item}]}
+                        ],
+                    }
+                    for item in items
+                ],
+            }
+        )
     return nodes
 
 
@@ -128,7 +172,9 @@ def _build_description_adf(description_text: str, enrichments: Optional[list[dic
         return base_adf
     combined_adf = {"type": "doc", "version": 1, "content": base_adf["content"] + notes_nodes}
     if len(json.dumps(combined_adf).encode("utf-8")) > _JIRA_ADF_BYTE_LIMIT:
-        logger.warning("ADF description with enrichments exceeds size limit. Dropping implementation notes.")
+        logger.warning(
+            "ADF description with enrichments exceeds size limit. Dropping implementation notes."
+        )
         return base_adf
     return combined_adf
 
@@ -151,13 +197,17 @@ def _create_issue_with_retry(payload: dict, jira_email: str, jira_token: str) ->
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = requests.post(JIRA_CONFIG["create_issue_url"], headers=headers, json=payload, timeout=15)
+            resp = requests.post(
+                JIRA_CONFIG["create_issue_url"], headers=headers, json=payload, timeout=15
+            )
         except requests.RequestException as e:
             logger.warning(f"Jira network error (attempt {attempt + 1}): {e}")
             if attempt < MAX_RETRIES:
                 time.sleep(BACKOFF_SECONDS[attempt])
                 continue
-            return JiraCreateResult(success=False, error="Network error contacting Jira. Check server logs.")
+            return JiraCreateResult(
+                success=False, error="Network error contacting Jira. Check server logs."
+            )
 
         if resp.ok:
             data = resp.json()
@@ -169,10 +219,15 @@ def _create_issue_with_retry(payload: dict, jira_email: str, jira_token: str) ->
 
         if 400 <= resp.status_code < 500:
             logger.error(f"Jira client error {resp.status_code}: {resp.text}")
-            return JiraCreateResult(success=False, error=f"Jira API error ({resp.status_code}). Check server logs.")
+            return JiraCreateResult(
+                success=False, error=f"Jira API error ({resp.status_code}). Check server logs."
+            )
 
         logger.warning(f"Jira server error {resp.status_code} (attempt {attempt + 1})")
         if attempt < MAX_RETRIES:
             time.sleep(BACKOFF_SECONDS[attempt])
 
-    return JiraCreateResult(success=False, error=f"Jira server error after {MAX_RETRIES + 1} attempts. Check server logs.")
+    return JiraCreateResult(
+        success=False,
+        error=f"Jira server error after {MAX_RETRIES + 1} attempts. Check server logs.",
+    )

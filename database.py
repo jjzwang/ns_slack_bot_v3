@@ -26,15 +26,26 @@ logger = logging.getLogger(__name__)
 # identifiers (only values), so an explicit allowlist is the safe alternative.
 
 _ALLOWED_UPDATE_COLUMNS = {
-    "status", "message_history", "pillars_json", "attempts",
-    "review_completed", "review_gaps_json", "review_enrichments_json",
-    "review_turn_index", "review_attempts", "updated_at","is_verifying"
+    "status",
+    "message_history",
+    "pillars_json",
+    "attempts",
+    "review_completed",
+    "review_gaps_json",
+    "review_enrichments_json",
+    "review_turn_index",
+    "review_attempts",
+    "updated_at",
+    "is_verifying",
 }
 
 _ALLOWED_MIGRATION_COLUMNS = {
-    "review_completed", "review_gaps_json",
-    "review_enrichments_json", "review_turn_index",
-    "review_attempts","is_verifying"
+    "review_completed",
+    "review_gaps_json",
+    "review_enrichments_json",
+    "review_turn_index",
+    "review_attempts",
+    "is_verifying",
 }
 # ─── Connection Pool ─────────────────────────────────────────────────────────
 
@@ -106,12 +117,20 @@ def init_db() -> None:
                     is_verifying            BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_interview_state_status ON interview_state (status)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_interview_state_user_id ON interview_state (user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_interview_state_pillars ON interview_state USING GIN (pillars_json)")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interview_state_status ON interview_state (status)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interview_state_user_id ON interview_state (user_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interview_state_pillars ON interview_state USING GIN (pillars_json)"
+            )
             _migrate_add_column(cur, "review_completed", "BOOLEAN NOT NULL DEFAULT FALSE")
             _migrate_add_column(cur, "review_gaps_json", "JSONB NOT NULL DEFAULT '[]'::jsonb")
-            _migrate_add_column(cur, "review_enrichments_json", "JSONB NOT NULL DEFAULT '[]'::jsonb")
+            _migrate_add_column(
+                cur, "review_enrichments_json", "JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
             _migrate_add_column(cur, "review_turn_index", "INTEGER NOT NULL DEFAULT -1")
             _migrate_add_column(cur, "review_attempts", "INTEGER NOT NULL DEFAULT 0")
             _migrate_add_column(cur, "is_verifying", "BOOLEAN NOT NULL DEFAULT FALSE")
@@ -127,10 +146,13 @@ def init_db() -> None:
 def _migrate_add_column(cur, column: str, definition: str) -> None:
     if column not in _ALLOWED_MIGRATION_COLUMNS:
         raise ValueError(f"Migration: disallowed column name '{column}'")
-    cur.execute("""
+    cur.execute(
+        """
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'interview_state' AND column_name = %s
-    """, (column,))
+    """,
+        (column,),
+    )
     if cur.fetchone() is None:
         # Safe: column is validated against _ALLOWED_MIGRATION_COLUMNS above.
         cur.execute(f"ALTER TABLE interview_state ADD COLUMN {column} {definition}")
@@ -208,7 +230,12 @@ class InterviewState:
 
 def _row_to_state(row: dict) -> InterviewState:
     data = dict(row)
-    for json_field in ("pillars_json", "message_history", "review_gaps_json", "review_enrichments_json"):
+    for json_field in (
+        "pillars_json",
+        "message_history",
+        "review_gaps_json",
+        "review_enrichments_json",
+    ):
         val = data.get(json_field)
         if val is not None and not isinstance(val, str):
             data[json_field] = json.dumps(val)
@@ -249,13 +276,24 @@ def create_state(state: InterviewState) -> None:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s)
                 """,
                 (
-                    state.thread_id, state.channel_id, state.user_id,
-                    state.user_email, state.user_jira_id, state.user_display_name,
-                    state.status, state.pillars_json, state.message_history,
-                    state.attempts, state.review_completed, state.review_gaps_json,
-                    state.review_enrichments_json, state.review_turn_index,
-                    state.review_attempts,state.is_verifying,
-                    state.created_at, state.updated_at,
+                    state.thread_id,
+                    state.channel_id,
+                    state.user_id,
+                    state.user_email,
+                    state.user_jira_id,
+                    state.user_display_name,
+                    state.status,
+                    state.pillars_json,
+                    state.message_history,
+                    state.attempts,
+                    state.review_completed,
+                    state.review_gaps_json,
+                    state.review_enrichments_json,
+                    state.review_turn_index,
+                    state.review_attempts,
+                    state.is_verifying,
+                    state.created_at,
+                    state.updated_at,
                 ),
             )
         conn.commit()
@@ -276,7 +314,12 @@ def update_state(thread_id: str, **updates) -> None:
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    _jsonb_columns = {"pillars_json", "message_history", "review_gaps_json", "review_enrichments_json"}
+    _jsonb_columns = {
+        "pillars_json",
+        "message_history",
+        "review_gaps_json",
+        "review_enrichments_json",
+    }
     set_fragments = []
     for k in updates:
         if k in _jsonb_columns:

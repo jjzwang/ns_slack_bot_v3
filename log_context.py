@@ -17,7 +17,7 @@ import json
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any
 
 # The "-" default means "no active thread context" — useful for startup
 # logs (validate_config, init_db) that happen before any interview starts.
@@ -68,13 +68,13 @@ def serialize_message_content(content: Any) -> str:
 def log_claude_call(
     *,
     domain: str,
-    phase: Optional[str],
+    phase: str | None,
     model: str,
     prompt: str,
     response: str,
     latency_ms: int,
-    input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
     tenant_id: str = "internal",
 ) -> None:
     """Emit one structured log entry for a Claude API call.

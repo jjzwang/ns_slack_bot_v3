@@ -56,9 +56,14 @@ _VALID_SEVERITIES = {"high", "medium"}
 _VALID_GAP_PILLARS = {"action", "persona", "goal", "business_value"}
 _VALID_ENRICHMENT_PILLARS = {"description", "acceptance_criteria"}
 _VALID_CATEGORIES = {
-    "implementation_approach", "edge_case", "native_alternative",
-    "downstream_impact", "compliance_risk", "integration_dependency",
-    "governance_concern", "scope_clarification",
+    "implementation_approach",
+    "edge_case",
+    "native_alternative",
+    "downstream_impact",
+    "compliance_risk",
+    "integration_dependency",
+    "governance_concern",
+    "scope_clarification",
 }
 _VALID_CONFIDENCES = {"high", "medium", "low"}
 
@@ -106,20 +111,30 @@ def extract_pillars(message_history: list[dict[str, str]], api_key: str) -> Extr
         )
         text = "".join(block.text for block in response.content if block.type == "text")
         pillars = _parse_extraction_json(text)
-        logger.info("pillar_extraction_complete", extra={
-            "pillars_populated": [k for k, v in pillars.items() if v is not None],
-            "pillars_missing": [k for k, v in pillars.items() if v is None],
-            "extraction_duration_ms": duration_ms,
-        })
+        logger.info(
+            "pillar_extraction_complete",
+            extra={
+                "pillars_populated": [k for k, v in pillars.items() if v is not None],
+                "pillars_missing": [k for k, v in pillars.items() if v is None],
+                "extraction_duration_ms": duration_ms,
+            },
+        )
         return ExtractionResult(pillars=pillars, duration_ms=duration_ms)
     except Exception as e:
         duration_ms = int((time.monotonic() - start) * 1000)
-        logger.warning("pillar_extraction_skipped", extra={
-            "reason": type(e).__name__, "error": str(e), "extraction_duration_ms": duration_ms,
-        })
+        logger.warning(
+            "pillar_extraction_skipped",
+            extra={
+                "reason": type(e).__name__,
+                "error": str(e),
+                "extraction_duration_ms": duration_ms,
+            },
+        )
         return ExtractionResult(
             pillars={"persona": None, "action": None, "goal": None, "business_value": None},
-            duration_ms=duration_ms, success=False, error=str(e),
+            duration_ms=duration_ms,
+            success=False,
+            error=str(e),
         )
 
 
@@ -135,7 +150,9 @@ def core_pillars_ready(pillars: dict) -> bool:
     return all(pillars.get(p) is not None for p in ("persona", "action", "goal", "business_value"))
 
 
-def run_review_gate(pillars: dict, message_history: list[dict[str, str]], api_key: str) -> ReviewResult:
+def run_review_gate(
+    pillars: dict, message_history: list[dict[str, str]], api_key: str
+) -> ReviewResult:
     start = time.monotonic()
     try:
         client = _get_review_client(api_key)
@@ -162,18 +179,26 @@ def run_review_gate(pillars: dict, message_history: list[dict[str, str]], api_ke
         )
         text = "".join(block.text for block in response.content if block.type == "text")
         gaps, enrichments = _parse_review_json(text)
-        logger.info("review_gate_complete", extra={
-            "gaps_count": len(gaps),
-            "gaps_severity": [g.get("severity") for g in gaps],
-            "enrichments_count": len(enrichments),
-            "review_duration_ms": duration_ms,
-        })
+        logger.info(
+            "review_gate_complete",
+            extra={
+                "gaps_count": len(gaps),
+                "gaps_severity": [g.get("severity") for g in gaps],
+                "enrichments_count": len(enrichments),
+                "review_duration_ms": duration_ms,
+            },
+        )
         return ReviewResult(gaps=gaps, enrichments=enrichments, duration_ms=duration_ms)
     except Exception as e:
         duration_ms = int((time.monotonic() - start) * 1000)
-        logger.warning("review_gate_skipped", extra={
-            "reason": type(e).__name__, "error": str(e), "review_duration_ms": duration_ms,
-        })
+        logger.warning(
+            "review_gate_skipped",
+            extra={
+                "reason": type(e).__name__,
+                "error": str(e),
+                "review_duration_ms": duration_ms,
+            },
+        )
         return ReviewResult(duration_ms=duration_ms, success=False, skipped=True, error=str(e))
 
 
@@ -201,7 +226,7 @@ def _extract_json_object(text: str) -> Optional[dict]:
     last_brace = text.rfind("}")
     if first_brace != -1 and last_brace > first_brace:
         try:
-            data = json.loads(text[first_brace:last_brace + 1])
+            data = json.loads(text[first_brace : last_brace + 1])
             if isinstance(data, dict):
                 return data
         except json.JSONDecodeError:
@@ -243,14 +268,18 @@ def _parse_review_json(text: str) -> tuple[list[dict], list[dict]]:
             continue
         valid_gaps.append(gap)
 
-    valid_gaps.sort(key=lambda g: (
-        0 if g.get("severity") == "high" else 1,
-        _PILLAR_PRIORITY.get(g.get("pillar"), 99),
-    ))
+    valid_gaps.sort(
+        key=lambda g: (
+            0 if g.get("severity") == "high" else 1,
+            _PILLAR_PRIORITY.get(g.get("pillar"), 99),
+        )
+    )
     overflow_gaps = valid_gaps[MAX_REVIEW_GAPS:]
     valid_gaps = valid_gaps[:MAX_REVIEW_GAPS]
 
-    raw_enrichments = data.get("enrichments", []) if isinstance(data.get("enrichments"), list) else []
+    raw_enrichments = (
+        data.get("enrichments", []) if isinstance(data.get("enrichments"), list) else []
+    )
     valid_enrichments = []
     for enrichment in raw_enrichments:
         if not isinstance(enrichment, dict):
@@ -263,11 +292,13 @@ def _parse_review_json(text: str) -> tuple[list[dict], list[dict]]:
         valid_enrichments.append(enrichment)
 
     for gap in overflow_gaps:
-        valid_enrichments.append({
-            "pillar": "description",
-            "category": "scope_clarification",
-            "detail": f"{gap.get('gap', '')} (Suggested question: {gap.get('suggested_question', '')})",
-            "confidence": "medium",
-        })
+        valid_enrichments.append(
+            {
+                "pillar": "description",
+                "category": "scope_clarification",
+                "detail": f"{gap.get('gap', '')} (Suggested question: {gap.get('suggested_question', '')})",
+                "confidence": "medium",
+            }
+        )
 
     return valid_gaps, valid_enrichments[:MAX_REVIEW_ENRICHMENTS]

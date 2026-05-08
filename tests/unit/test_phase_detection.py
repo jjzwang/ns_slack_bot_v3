@@ -85,7 +85,9 @@ def test_review_with_gaps_no_ac_returns_gathering_with_gaps():
     state = _state(
         pillars=ALL_PILLARS,
         review_completed=True,
-        review_gaps=[{"pillar": "action", "severity": "high", "gap": "...", "suggested_question": "..."}],
+        review_gaps=[
+            {"pillar": "action", "severity": "high", "gap": "...", "suggested_question": "..."}
+        ],
         review_turn_index=2,
     )
     assert detect_phase(history, state) == "gathering_with_gaps"
@@ -100,7 +102,9 @@ def test_review_with_gaps_but_ac_drafted_falls_through_to_drafting():
     state = _state(
         pillars=ALL_PILLARS,
         review_completed=True,
-        review_gaps=[{"pillar": "action", "severity": "high", "gap": "...", "suggested_question": "..."}],
+        review_gaps=[
+            {"pillar": "action", "severity": "high", "gap": "...", "suggested_question": "..."}
+        ],
         review_turn_index=1,
     )
     assert detect_phase(history, state) == "drafting"
