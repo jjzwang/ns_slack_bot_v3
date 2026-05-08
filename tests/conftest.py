@@ -25,3 +25,25 @@ for k, v in _TEST_ENV.items():
 
 # Explicitly ensure migrations don't run on import — there is no real DB.
 os.environ.pop("RUN_MIGRATIONS", None)
+
+
+# =============================================================================
+# Disable Slack token verification during test imports
+# =============================================================================
+# slack_bolt.App() calls auth.test against Slack's API on construction by
+# default, which fails with our fake xoxb-test token and aborts collection
+# of any test module that imports app. Patch the class init to default
+# token_verification_enabled to False — applies for the test session only,
+# production app.py is unchanged.
+
+import slack_bolt  # noqa: E402
+
+_orig_app_init = slack_bolt.App.__init__
+
+
+def _patched_app_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    kwargs.setdefault("token_verification_enabled", False)
+    return _orig_app_init(self, *args, **kwargs)
+
+
+slack_bolt.App.__init__ = _patched_app_init  # type: ignore[method-assign]
