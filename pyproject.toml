@@ -68,6 +68,10 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+# Tests aren't a proper package (no __init__.py) so the `tests.*` override
+# below doesn't match. Excluding the directory entirely is simpler than
+# stubbing __init__.py files we don't otherwise need.
+exclude = ["^tests/"]
 
 [[tool.mypy.overrides]]
 module = [
