@@ -2,6 +2,7 @@
 # Claude API Client
 # =============================================================================
 
+import json
 import logging
 import re
 import time
@@ -12,6 +13,7 @@ import anthropic
 
 from config import CLAUDE_MODEL, CLAUDE_TOOLS, MAX_ATTEMPTS
 from database import InterviewState
+from log_context import log_claude_call, serialize_message_content
 from prompt_builder import assemble_prompt
 
 logger = logging.getLogger(__name__)
@@ -113,12 +115,25 @@ def call_claude(
 
     for attempt in range(MAX_ATTEMPTS):
         try:
+            start = time.monotonic()
             response = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=2048,
                 system=system_prompt,
                 tools=CLAUDE_TOOLS,
                 messages=message_history,
+            )
+            latency_ms = int((time.monotonic() - start) * 1000)
+            usage = getattr(response, "usage", None)
+            log_claude_call(
+                domain="netsuite",
+                phase=phase,
+                model=CLAUDE_MODEL,
+                prompt=json.dumps({"system": system_prompt, "messages": message_history}),
+                response=serialize_message_content(response.content),
+                latency_ms=latency_ms,
+                input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+                output_tokens=getattr(usage, "output_tokens", None) if usage else None,
             )
             return _parse_response(response)
 

@@ -172,10 +172,12 @@ Source: derived from `app.py` and `prompt_builder.py` at the
       `pillars_populated` / `pillars_missing` / `extraction_duration_ms`
 - [ ] `review_gate_complete` log fires once per thread when the gate succeeds,
       with `gaps_count` / `gaps_severity` / `enrichments_count`
-- [ ] **Known gap** (Phase 0 commit 5 will close this): individual Claude
-      calls in `claude_client.call_claude` do not yet log prompt / response /
-      tokens / latency. The gate and extraction calls log latency but not
-      prompt/response
+- [ ] Every Claude call (interview, extraction, review gate) emits a
+      `claude_call` log line via `log_context.log_claude_call(...)` with:
+      domain, phase, model, prompt, response, latency_ms, input_tokens,
+      output_tokens, tenant_id. Verify by tailing the bot logs during one
+      interview turn and counting at least one `claude_call` line per Claude
+      API hit. Storage to Postgres / Langfuse is a Phase 3 task
 
 ---
 

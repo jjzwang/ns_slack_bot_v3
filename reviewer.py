@@ -20,6 +20,7 @@ from config import (
     MAX_REVIEW_GAPS,
     REVIEW_TIMEOUT_S,
 )
+from log_context import log_claude_call, serialize_message_content
 from review_prompts import EXTRACTION_PROMPT, REVIEW_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -91,9 +92,20 @@ def extract_pillars(message_history: list[dict[str, str]], api_key: str) -> Extr
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
+        duration_ms = int((time.monotonic() - start) * 1000)
+        usage = getattr(response, "usage", None)
+        log_claude_call(
+            domain="netsuite",
+            phase="extraction",
+            model=EXTRACTION_MODEL,
+            prompt=prompt,
+            response=serialize_message_content(response.content),
+            latency_ms=duration_ms,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+        )
         text = "".join(block.text for block in response.content if block.type == "text")
         pillars = _parse_extraction_json(text)
-        duration_ms = int((time.monotonic() - start) * 1000)
         logger.info("pillar_extraction_complete", extra={
             "pillars_populated": [k for k, v in pillars.items() if v is not None],
             "pillars_missing": [k for k, v in pillars.items() if v is None],
@@ -136,9 +148,20 @@ def run_review_gate(pillars: dict, message_history: list[dict[str, str]], api_ke
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
+        duration_ms = int((time.monotonic() - start) * 1000)
+        usage = getattr(response, "usage", None)
+        log_claude_call(
+            domain="netsuite",
+            phase="review_gate",
+            model=CLAUDE_MODEL,
+            prompt=prompt,
+            response=serialize_message_content(response.content),
+            latency_ms=duration_ms,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+        )
         text = "".join(block.text for block in response.content if block.type == "text")
         gaps, enrichments = _parse_review_json(text)
-        duration_ms = int((time.monotonic() - start) * 1000)
         logger.info("review_gate_complete", extra={
             "gaps_count": len(gaps),
             "gaps_severity": [g.get("severity") for g in gaps],
