@@ -55,7 +55,7 @@ from identity import UserIdentity, resolve_user_identity
 from jira_client import create_jira_ticket
 from log_context import ThreadContextFilter, thread_context
 from prompt_builder import _VERIFY_MARKERS, detect_phase
-from reviewer import core_pillars_ready, extract_pillars, merge_pillars, run_review_gate
+from reviewer import extract_pillars, merge_pillars, run_review_gate
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 
@@ -588,7 +588,7 @@ def _run_interview_turn(
                 message_history=history,
             )
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error in interview turn for thread {thread_ts}")
         error_text = "Something went wrong on my end. Could you repeat your last message?"
         try:

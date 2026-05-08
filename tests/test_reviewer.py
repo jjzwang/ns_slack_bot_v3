@@ -1,7 +1,3 @@
-import json
-
-import pytest
-
 from reviewer import (
     _parse_extraction_json,
     _parse_review_json,
