@@ -6,7 +6,7 @@
 
 # Lint / format / type check
 ruff>=0.4,<1.0
-black>=24.0,<26.0
+black>=26.0,<27.0
 mypy>=1.10,<2.0
 
 # Test runner
